@@ -17,162 +17,264 @@
 package tidesdb_go
 
 /*
-#cgo LDFLAGS: -ltidesdb
-#include <tidesdb.h> // you must have TidesDB shared library installed
-#include <stdlib.h>
+#include <tidesdb.h>
 */
 import "C"
 import (
-	"time"
+	"errors"
 	"unsafe"
 )
 
-// TidesDB struct holds the pointer to the C tidesdb_t struct
+// TidesDB represents a TidesDB instance.
 type TidesDB struct {
 	tdb *C.tidesdb_t
 }
 
-// TidesDBErr struct holds the error code and message
-type TidesDBErr struct {
-	Code    int    // the error code
-	Message string // the error message
+// Cursor represents a TidesDB cursor.
+type Cursor struct {
+	cursor *C.tidesdb_cursor_t
 }
 
-// Open opens a TidesDB instance
-func Open(path string, compressedWal bool) (*TidesDB, *TidesDBErr) {
-	cPath := C.CString(path)
-	defer C.free(unsafe.Pointer(cPath))
-
-	var cTdb *C.tidesdb_t
-	var cConfig C.tidesdb_config_t
-	cConfig.db_path = cPath
-	if compressedWal {
-		cConfig.compressed_wal = C._Bool(true)
-	} else {
-		cConfig.compressed_wal = C._Bool(false)
-	}
-
-	cErr := C.tidesdb_open(&cConfig, &cTdb)
-	if cErr != nil {
-		return nil, &TidesDBErr{
-			Code:    int(cErr.code),
-			Message: C.GoString(cErr.message),
-		}
-	}
-
-	return &TidesDB{tdb: cTdb}, nil
+// Transaction represents a TidesDB transaction.
+type Transaction struct {
+	txn *C.tidesdb_txn_t
 }
 
-// Close closes the TidesDB instance
-func (db *TidesDB) Close() *TidesDBErr {
-	cErr := C.tidesdb_close(db.tdb)
-	if cErr != nil {
-		return &TidesDBErr{
-			Code:    int(cErr.code),
-			Message: C.GoString(cErr.message),
-		}
+// Open opens a TidesDB instance.
+func Open(directory string) (*TidesDB, error) {
+	cDir := C.CString(directory)
+	defer C.free(unsafe.Pointer(cDir))
+
+	var tdb *C.tidesdb_t
+	err := C.tidesdb_open(cDir, &tdb)
+	if err != nil {
+		return nil, errors.New(C.GoString(err.message))
+	}
+
+	return &TidesDB{tdb: tdb}, nil
+}
+
+// Close closes a TidesDB instance.
+func (db *TidesDB) Close() error {
+	err := C.tidesdb_close(db.tdb)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
 	}
 	return nil
 }
 
-// CreateColumnFamily creates a column family
-func (db *TidesDB) CreateColumnFamily(name string, flushThreshold, maxLevel int, probability float32, compressed bool) *TidesDBErr {
+// CreateColumnFamily creates a new column family.
+func (db *TidesDB) CreateColumnFamily(name string, flushThreshold, maxLevel int, probability float32, compressed bool, compressAlgo int, bloomFilter bool) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	cErr := C.tidesdb_create_column_family(db.tdb, cName, C.int(flushThreshold), C.int(maxLevel), C.float(probability), C._Bool(compressed))
-	if cErr != nil {
-		return &TidesDBErr{
-			Code:    int(cErr.code),
-			Message: C.GoString(cErr.message),
-		}
+	err := C.tidesdb_create_column_family(db.tdb, cName, C.int(flushThreshold), C.int(maxLevel), C.float(probability), C.bool(compressed), C.tidesdb_compression_algo_t(compressAlgo), C.bool(bloomFilter))
+	if err != nil {
+		return errors.New(C.GoString(err.message))
 	}
 	return nil
 }
 
-// DropColumnFamily drops a column family
-func (db *TidesDB) DropColumnFamily(name string) *TidesDBErr {
+// DropColumnFamily drops a column family and all associated data.
+func (db *TidesDB) DropColumnFamily(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	cErr := C.tidesdb_drop_column_family(db.tdb, cName)
-	if cErr != nil {
-		return &TidesDBErr{
-			Code:    int(cErr.code),
-			Message: C.GoString(cErr.message),
-		}
+	err := C.tidesdb_drop_column_family(db.tdb, cName)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
 	}
 	return nil
 }
 
-// CompactSSTables compacts the SSTables for a column family
-func (db *TidesDB) CompactSSTables(cf string, maxThreads int) *TidesDBErr {
-	cErr := C.tidesdb_compact_sstables(db.tdb, C.CString(cf), C.int(maxThreads))
-	if cErr != nil {
-		return &TidesDBErr{
-			Code:    int(cErr.code),
-			Message: C.GoString(cErr.message),
-		}
+// CompactSSTables pairs and merges SSTables in a column family.
+func (db *TidesDB) CompactSSTables(columnFamilyName string, maxThreads int) error {
+	cName := C.CString(columnFamilyName)
+	defer C.free(unsafe.Pointer(cName))
+
+	err := C.tidesdb_compact_sstables(db.tdb, cName, C.int(maxThreads))
+	if err != nil {
+		return errors.New(C.GoString(err.message))
 	}
 	return nil
 }
 
-// Put puts a key-value pair into the database
-func (db *TidesDB) Put(columnFamilyName string, key []byte, value []byte, ttl time.Duration) *TidesDBErr {
-	cColumnFamilyName := C.CString(columnFamilyName)
-	defer C.free(unsafe.Pointer(cColumnFamilyName))
+// Put puts a key-value pair into TidesDB.
+func (db *TidesDB) Put(columnFamilyName string, key, value []byte, ttl int64) error {
+	cfName := C.CString(columnFamilyName)
+	defer C.free(unsafe.Pointer(cfName))
 
 	cKey := (*C.uint8_t)(unsafe.Pointer(&key[0]))
 	cValue := (*C.uint8_t)(unsafe.Pointer(&value[0]))
 
-	cErr := C.tidesdb_put(db.tdb, cColumnFamilyName, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), C.time_t(ttl.Seconds()))
-	if cErr != nil {
-		return &TidesDBErr{
-			Code:    int(cErr.code),
-			Message: C.GoString(cErr.message),
-		}
+	err := C.tidesdb_put(db.tdb, cfName, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), C.time_t(ttl))
+	if err != nil {
+		return errors.New(C.GoString(err.message))
 	}
 	return nil
 }
 
-// Get gets a value from the database
-func (db *TidesDB) Get(columnFamilyName string, key []byte) ([]byte, *TidesDBErr) {
-	cColumnFamilyName := C.CString(columnFamilyName)
-	defer C.free(unsafe.Pointer(cColumnFamilyName))
+// Get gets a value from TidesDB.
+func (db *TidesDB) Get(columnFamilyName string, key []byte) ([]byte, error) {
+	cfName := C.CString(columnFamilyName)
+	defer C.free(unsafe.Pointer(cfName))
 
 	cKey := (*C.uint8_t)(unsafe.Pointer(&key[0]))
+
 	var cValue *C.uint8_t
 	var cValueSize C.size_t
 
-	cErr := C.tidesdb_get(db.tdb, cColumnFamilyName, cKey, C.size_t(len(key)), &cValue, &cValueSize)
-	if cErr != nil {
-		return nil, &TidesDBErr{
-			Code:    int(cErr.code),
-			Message: C.GoString(cErr.message),
-		}
+	err := C.tidesdb_get(db.tdb, cfName, cKey, C.size_t(len(key)), &cValue, &cValueSize)
+	if err != nil {
+		return nil, errors.New(C.GoString(err.message))
 	}
 
 	value := C.GoBytes(unsafe.Pointer(cValue), C.int(cValueSize))
-	C.free(unsafe.Pointer(cValue))
-
 	return value, nil
 }
 
-// Delete deletes a key-value pair from the database
-func (db *TidesDB) Delete(columnFamilyName string, key []byte) *TidesDBErr {
-	cColumnFamilyName := C.CString(columnFamilyName)
-	defer C.free(unsafe.Pointer(cColumnFamilyName))
+// Delete deletes a key-value pair from TidesDB.
+func (db *TidesDB) Delete(columnFamilyName string, key []byte) error {
+	cfName := C.CString(columnFamilyName)
+	defer C.free(unsafe.Pointer(cfName))
 
 	cKey := (*C.uint8_t)(unsafe.Pointer(&key[0]))
 
-	cErr := C.tidesdb_delete(db.tdb, cColumnFamilyName, cKey, C.size_t(len(key)))
-	if cErr != nil {
-		return &TidesDBErr{
-			Code:    int(cErr.code),
-			Message: C.GoString(cErr.message),
-		}
+	err := C.tidesdb_delete(db.tdb, cfName, cKey, C.size_t(len(key)))
+	if err != nil {
+		return errors.New(C.GoString(err.message))
 	}
 	return nil
 }
 
-// must add cursor support, transaction support
+// ListColumnFamilies lists the column families in TidesDB.
+func (db *TidesDB) ListColumnFamilies() (string, error) {
+	cfList := C.tidesdb_list_column_families(db.tdb)
+	if cfList == nil {
+		return "", errors.New("failed to list column families")
+	}
+	return C.GoString(cfList), nil
+}
+
+// CursorInit initializes a new TidesDB cursor.
+func (db *TidesDB) CursorInit(columnFamily string) (*Cursor, error) {
+	cfName := C.CString(columnFamily)
+	defer C.free(unsafe.Pointer(cfName))
+
+	var cursor *C.tidesdb_cursor_t
+	err := C.tidesdb_cursor_init(db.tdb, cfName, &cursor)
+	if err != nil {
+		return nil, errors.New(C.GoString(err.message))
+	}
+
+	return &Cursor{cursor: cursor}, nil
+}
+
+// Next moves the cursor to the next key-value pair.
+func (c *Cursor) Next() error {
+	err := C.tidesdb_cursor_next(c.cursor)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// Prev moves the cursor to the previous key-value pair.
+func (c *Cursor) Prev() error {
+	err := C.tidesdb_cursor_prev(c.cursor)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// Get gets the current key-value pair from the cursor.
+func (c *Cursor) Get() ([]byte, []byte, error) {
+	var cKey *C.uint8_t
+	var cKeySize C.size_t
+	var cValue *C.uint8_t
+	var cValueSize C.size_t
+
+	err := C.tidesdb_cursor_get(c.cursor, &cKey, &cKeySize, &cValue, &cValueSize)
+	if err != nil {
+		return nil, nil, errors.New(C.GoString(err.message))
+	}
+
+	key := C.GoBytes(unsafe.Pointer(cKey), C.int(cKeySize))
+	value := C.GoBytes(unsafe.Pointer(cValue), C.int(cValueSize))
+
+	return key, value, nil
+}
+
+// Free frees the memory for the cursor.
+func (c *Cursor) Free() error {
+	err := C.tidesdb_cursor_free(c.cursor)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// BeginTxn begins a transaction.
+func (db *TidesDB) BeginTxn(columnFamily string) (*Transaction, error) {
+	cfName := C.CString(columnFamily)
+	defer C.free(unsafe.Pointer(cfName))
+
+	var txn *C.tidesdb_txn_t
+	err := C.tidesdb_txn_begin(db.tdb, &txn, cfName)
+	if err != nil {
+		return nil, errors.New(C.GoString(err.message))
+	}
+
+	return &Transaction{txn: txn}, nil
+}
+
+// Put adds a key-value pair to the transaction.
+func (txn *Transaction) Put(key, value []byte, ttl int64) error {
+	cKey := (*C.uint8_t)(unsafe.Pointer(&key[0]))
+	cValue := (*C.uint8_t)(unsafe.Pointer(&value[0]))
+
+	err := C.tidesdb_txn_put(txn.txn, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), C.time_t(ttl))
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// Delete removes a key-value pair from the transaction.
+func (txn *Transaction) Delete(key []byte) error {
+	cKey := (*C.uint8_t)(unsafe.Pointer(&key[0]))
+
+	err := C.tidesdb_txn_delete(txn.txn, cKey, C.size_t(len(key)))
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// Commit commits the transaction.
+func (txn *Transaction) Commit() error {
+	err := C.tidesdb_txn_commit(txn.txn)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// Rollback rolls back the transaction.
+func (txn *Transaction) Rollback() error {
+	err := C.tidesdb_txn_rollback(txn.txn)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// Free frees the transaction and its operations.
+func (txn *Transaction) Free() error {
+	err := C.tidesdb_txn_free(txn.txn)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
