@@ -82,11 +82,11 @@ func (db *TidesDB) Close() error {
 }
 
 // CreateColumnFamily creates a new column family.
-func (db *TidesDB) CreateColumnFamily(name string, flushThreshold, maxLevel int, probability float32, compressed bool, compressAlgo int, bloomFilter bool, memtableDs TidesDBMemtableDS) error {
+func (db *TidesDB) CreateColumnFamily(name string, flushThreshold, maxLevel int, probability float32, compressed bool, compressAlgo int, bloomFilter bool, memtableDs int) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	err := C.tidesdb_create_column_family(db.tdb, cName, C.int(flushThreshold), C.int(maxLevel), C.float(probability), C.bool(compressed), C.tidesdb_compression_algo_t(compressAlgo), C.bool(bloomFilter), memtableDs)
+	err := C.tidesdb_create_column_family(db.tdb, cName, C.int(flushThreshold), C.int(maxLevel), C.float(probability), C.bool(compressed), C.tidesdb_compression_algo_t(compressAlgo), C.bool(bloomFilter), C.tidesdb_memtable_ds_t(memtableDs))
 	if err != nil {
 		return errors.New(C.GoString(err.message))
 	}
