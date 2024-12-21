@@ -15,7 +15,7 @@ go get github.com/tidesdb/tidesdb
 ```go
 db, err := tidesdb_go.Open("/path/to/db") // will reopen the database if it already exists
 if err != nil {
-log.Fatal(err)
+    log.Fatal(err)
 }
 defer db.Close()
 ```
@@ -25,7 +25,7 @@ Column families are used to store data in TidesDB. You can create a column famil
 ```go
 err := db.CreateColumnFamily("example_cf", 1000, 7, 0.1, true, tidesdb_go.TDB_COMPRESS_SNAPPY, true, tidesdb_go.TDB_MEMTABLE_SKIP_LIST)
 if err != nil {
-<l></l>og.Fatal(err)
+    log.Fatal(err)
 }
 
 // You can also drop a column family using the `DropColumnFamily` method.
@@ -38,7 +38,7 @@ if err != nil {
 #### CRUD operations
 
 ##### Writing data
-```gp
+```go
 err := db.Put("example_cf", []byte("key"), []byte("value"), -1)
 if err != nil {
     log.Fatal(err)
