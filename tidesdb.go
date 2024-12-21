@@ -25,6 +25,24 @@ import (
 	"unsafe"
 )
 
+// TidesDBMemtableDS represents the data structure type for the memtable.
+type TidesDBMemtableDS int
+
+const (
+	TDB_MEMTABLE_SKIP_LIST  TidesDBMemtableDS = iota // a skip list data structure for the memtable
+	TDB_MEMTABLE_HASH_TABLE                          // a hash table data structure for the memtable
+)
+
+// TidesDBCompressionAlgo represents the compression algorithm type.
+type TidesDBCompressionAlgo int
+
+const (
+	TDB_NO_COMPRESSION TidesDBCompressionAlgo = iota
+	TDB_COMPRESS_SNAPPY
+	TDB_COMPRESS_LZ4
+	TDB_COMPRESS_ZSTD
+)
+
 // TidesDB represents a TidesDB instance.
 type TidesDB struct {
 	tdb *C.tidesdb_t
@@ -64,11 +82,11 @@ func (db *TidesDB) Close() error {
 }
 
 // CreateColumnFamily creates a new column family.
-func (db *TidesDB) CreateColumnFamily(name string, flushThreshold, maxLevel int, probability float32, compressed bool, compressAlgo int, bloomFilter bool) error {
+func (db *TidesDB) CreateColumnFamily(name string, flushThreshold, maxLevel int, probability float32, compressed bool, compressAlgo int, bloomFilter bool, memtableDs TidesDBMemtableDS) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	err := C.tidesdb_create_column_family(db.tdb, cName, C.int(flushThreshold), C.int(maxLevel), C.float(probability), C.bool(compressed), C.tidesdb_compression_algo_t(compressAlgo), C.bool(bloomFilter))
+	err := C.tidesdb_create_column_family(db.tdb, cName, C.int(flushThreshold), C.int(maxLevel), C.float(probability), C.bool(compressed), C.tidesdb_compression_algo_t(compressAlgo), C.bool(bloomFilter), memtableDs)
 	if err != nil {
 		return errors.New(C.GoString(err.message))
 	}
