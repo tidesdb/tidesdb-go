@@ -23,7 +23,7 @@ defer db.Close()
 #### Creating and dropping a column family
 Column families are used to store data in TidesDB. You can create a column family using the `CreateColumnFamily` method.
 ```go
-err := db.CreateColumnFamily("example_cf", 1000, 7, 0.1, true, tidesdb_go.TDB_COMPRESS_SNAPPY, true, tidesdb_go.TDB_MEMTABLE_SKIP_LIST)
+err := db.CreateColumnFamily("example_cf", 1024*1024*64, 12, 0.24, true, int(tidesdb_go.TDB_COMPRESS_SNAPPY), true, int(tidesdb_go.TDB_MEMTABLE_SKIP_LIST))
 if err != nil {
     log.Fatal(err)
 }

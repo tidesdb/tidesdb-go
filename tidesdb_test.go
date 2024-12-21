@@ -15,3 +15,136 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 package tidesdb_go
+
+import (
+	"os"
+	"testing"
+)
+
+func TestOpenClose(t *testing.T) {
+	defer os.RemoveAll("testdb")
+	db, err := Open("testdb")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+
+	defer db.Close()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Failed to close database: %v", err)
+	}
+}
+
+func TestCreateDropColumnFamily(t *testing.T) {
+	defer os.RemoveAll("testdb")
+	db, err := Open("testdb")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true, int(TDB_COMPRESS_SNAPPY))
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	err = db.DropColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to drop column family: %v", err)
+	}
+}
+
+func TestPutGetDelete(t *testing.T) {
+	defer os.RemoveAll("testdb")
+	db, err := Open("testdb")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true, int(TDB_MEMTABLE_SKIP_LIST))
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	defer func(db *TidesDB, name string) {
+		err := db.DropColumnFamily(name)
+		if err != nil {
+
+		}
+	}(db, "test_cf")
+
+	key := []byte("key")
+	value := []byte("value")
+
+	err = db.Put("test_cf", key, value, -1)
+	if err != nil {
+		t.Fatalf("Failed to put key-value pair: %v", err)
+	}
+
+	gotValue, err := db.Get("test_cf", key)
+	if err != nil {
+		t.Fatalf("Failed to get value: %v", err)
+	}
+	if string(gotValue) != string(value) {
+		t.Fatalf("Expected value %s, got %s", value, gotValue)
+	}
+
+	err = db.Delete("test_cf", key)
+	if err != nil {
+		t.Fatalf("Failed to delete key: %v", err)
+	}
+}
+
+func TestCompactSSTables(t *testing.T) {
+	// @TODO
+}
+
+func TestTransaction(t *testing.T) {
+	db, err := Open("testdb")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true, int(TDB_MEMTABLE_SKIP_LIST))
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	defer func(db *TidesDB, name string) {
+		err := db.DropColumnFamily(name)
+		if err != nil {
+			t.Fatalf("Failed to drop column family: %v", err)
+		}
+	}(db, "test_cf")
+
+	txn, err := db.BeginTxn("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer txn.Free()
+
+	key := []byte("key")
+	value := []byte("value")
+
+	err = txn.Put(key, value, -1)
+	if err != nil {
+		t.Fatalf("Failed to put key-value pair in transaction: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+
+	// Check if the key-value pair was added to the database
+	gotValue, err := db.Get("test_cf", key)
+	if err != nil {
+		t.Fatalf("Failed to get value: %v", err)
+	}
+
+	if string(gotValue) != string(value) {
+		t.Fatalf("Expected value %s, got %s", value, gotValue)
+	}
+}
+
+// More tests to be added...
