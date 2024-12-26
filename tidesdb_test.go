@@ -28,8 +28,6 @@ func TestOpenClose(t *testing.T) {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 
-	defer db.Close()
-
 	if err := db.Close(); err != nil {
 		t.Fatalf("Failed to close database: %v", err)
 	}
@@ -43,7 +41,7 @@ func TestCreateDropColumnFamily(t *testing.T) {
 	}
 	defer db.Close()
 
-	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true, int(TDB_COMPRESS_SNAPPY))
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true, int(TDB_MEMTABLE_SKIP_LIST))
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
