@@ -17,7 +17,9 @@
 package tidesdb_go
 
 /*
+#cgo LDFLAGS: -ltidesdb
 #include <tidesdb.h>
+#include <stdlib.h>
 */
 import "C"
 import (
