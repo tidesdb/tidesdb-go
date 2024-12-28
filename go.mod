@@ -1,4 +1,4 @@
-module tidesdb-go
+module github.com/tidesdb/tidesdb-go
 
 
 go 1.23
