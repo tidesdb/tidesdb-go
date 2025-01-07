@@ -2,11 +2,11 @@
 tidesdb-go is the official GO binding for TidesDB.
 
 ## Getting started
-You must make sure you have the TidesDB shared C library installed on your system.
+You must make sure you have the TidesDB shared C library installed on your system.  Be sure to also compile with `TIDESDB_WITH_SANITIZER` and `TIDESDB_BUILD_TESTS` OFF.
 
 ### Installation
 ```bash
-go get github.com/tidesdb/tidesdb
+go get github.com/tidesdb/tidesdb-go
 ```
 
 ### Usage
