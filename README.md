@@ -15,7 +15,7 @@ go get github.com/tidesdb/tidesdb-go
 ```go
 db, err := tidesdb_go.Open("/path/to/db") // will reopen the database if it already exists
 if err != nil {
-    log.Fatal(err)
+...
 }
 defer db.Close()
 ```
@@ -25,13 +25,13 @@ Column families are used to store data in TidesDB. You can create a column famil
 ```go
 err := db.CreateColumnFamily("example_cf", 1024*1024*64, 12, 0.24, true, int(tidesdb_go.TDB_COMPRESS_SNAPPY), true, int(tidesdb_go.TDB_MEMTABLE_SKIP_LIST))
 if err != nil {
-    log.Fatal(err)
+...
 }
 
 // You can also drop a column family using the `DropColumnFamily` method.
 err = db.DropColumnFamily("example_cf")
 if err != nil {
-    log.Fatal(err)
+...
 }
 ```
 
@@ -41,7 +41,7 @@ if err != nil {
 ```go
 err := db.Put("example_cf", []byte("key"), []byte("value"), -1)
 if err != nil {
-    log.Fatal(err)
+...
 }
 ```
 
@@ -49,7 +49,7 @@ With TTL
 ```go
 err := db.Put("example_cf", []byte("key"), []byte("value"), time.Now().Add(10*time.Second).Unix())
 if err != nil {
-    log.Fatal(err)
+...
 }
 ```
 
@@ -57,7 +57,7 @@ if err != nil {
 ```go
 value, err := db.Get("example_cf", []byte("key"))
 if err != nil {
-    log.Fatal(err)
+...
 }
 fmt.Println(string(value))
 ```
@@ -67,7 +67,7 @@ fmt.Println(string(value))
 ```go
 err := db.Delete("example_cf", []byte("key"))
 if err != nil {
-    log.Fatal(err)
+...
 }
 ```
 
@@ -76,7 +76,7 @@ if err != nil {
 ```go
 cursor, err := db.CursorInit("example_cf")
 if err != nil {
-    log.Fatal(err)
+...
 }
 defer cursor.Free()
 
@@ -95,29 +95,40 @@ cursor.Next() // or cursor.Prev()
 ```go
 txn, err := db.BeginTxn("example_cf")
 if err != nil {
-    log.Fatal(err)
+...
 }
 defer txn.Free()
 
 err = txn.Put([]byte("key"), []byte("value"), 0)
 if err != nil {
-    log.Fatal(err)
+...
 }
 
 // You can also do txn.Delete()
 
 err = txn.Commit()
 if err != nil {
-    log.Fatal(err)
+...
 }
 ```
 
 #### Compaction
-Compaction is done manually.  Say you have 100 sstables this method will compact to 50 sstables. Pairing, merging, and removing expired and tombstoned data.
+Compaction is done manually or in background.
+
+Merging operations, pair and merge sstables, removing expired keys if TTL set and tombstoned data; Say you have 100 sstables these methods will compact to 50 sstables.
+
+##### Manual
 ```go
 err := db.CompactSSTables("example_cf", 4) // 4 is the number of threads to use for compaction
 if err != nil {
-    log.Fatal(err)
+    ...
 }
 ```
 
+##### Background
+```go
+err := db.StartBackgroundPartialMerge("example_cf", 60, 1000) // merge a pair every 60 seconds only when we have a minimum of 1000 sstables
+if err != nil {
+...
+}
+```

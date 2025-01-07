@@ -300,3 +300,15 @@ func (txn *Transaction) Free() error {
 	}
 	return nil
 }
+
+// StartBackgroundPartialMerge starts a background partial merge for a column family.  Will run in background until db closure.  Will merge pairs incrementally and only once min sstables are has been reached.
+func (db *TidesDB) StartBackgroundPartialMerge(columnFamilyName string, seconds, minSSTables int) error {
+	cfName := C.CString(columnFamilyName)
+	defer C.free(unsafe.Pointer(cfName))
+
+	err := C.tidesdb_start_background_partial_merge(db.tdb, cfName, C.int(seconds), C.int(minSSTables))
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
