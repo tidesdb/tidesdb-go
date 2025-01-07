@@ -17,7 +17,7 @@
 package tidesdb_go
 
 /*
-#cgo LDFLAGS: -ltidesdb
+#cgo LDFLAGS: -L${SRCDIR}/lib -ltidesdb
 #include <tidesdb.h>
 #include <stdlib.h>
 */
@@ -169,10 +169,12 @@ func (db *TidesDB) Delete(columnFamilyName string, key []byte) error {
 
 // ListColumnFamilies lists the column families in TidesDB.
 func (db *TidesDB) ListColumnFamilies() (string, error) {
-	cfList := C.tidesdb_list_column_families(db.tdb)
-	if cfList == nil {
-		return "", errors.New("failed to list column families")
+	var cfList *C.char
+	err := C.tidesdb_list_column_families(db.tdb, &cfList)
+	if err != nil {
+		return "", errors.New(C.GoString(err.message))
 	}
+
 	return C.GoString(cfList), nil
 }
 

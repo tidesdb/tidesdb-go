@@ -17,6 +17,8 @@
 package tidesdb_go
 
 import (
+	"bytes"
+	"encoding/gob"
 	"os"
 	"testing"
 )
@@ -52,6 +54,11 @@ func TestCreateDropColumnFamily(t *testing.T) {
 	}
 }
 
+type TestStruct struct {
+	Name string
+	Age  int
+}
+
 func TestPutGetDelete(t *testing.T) {
 	defer os.RemoveAll("testdb")
 	db, err := Open("testdb")
@@ -71,10 +78,22 @@ func TestPutGetDelete(t *testing.T) {
 		}
 	}(db, "test_cf")
 
-	key := []byte("key")
-	value := []byte("value")
+	s := &TestStruct{
+		Name: "John Doe",
+		Age:  30,
+	}
 
-	err = db.Put("test_cf", key, value, -1)
+	b := make([]byte, 0)
+	buff := bytes.NewBuffer(b)
+
+	err = gob.NewEncoder(buff).Encode(s)
+	if err != nil {
+		return
+	}
+
+	key := []byte("key")
+
+	err = db.Put("test_cf", key, buff.Bytes(), -1)
 	if err != nil {
 		t.Fatalf("Failed to put key-value pair: %v", err)
 	}
@@ -83,8 +102,14 @@ func TestPutGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get value: %v", err)
 	}
-	if string(gotValue) != string(value) {
-		t.Fatalf("Expected value %s, got %s", value, gotValue)
+
+	// decode the value
+	var ts TestStruct
+	err = gob.NewDecoder(bytes.NewBuffer(gotValue)).Decode(&ts)
+
+	if ts.Name != s.Name || ts.Age != s.Age {
+		t.Fatalf("Expected value %v, got %v", s, ts)
+
 	}
 
 	err = db.Delete("test_cf", key)
