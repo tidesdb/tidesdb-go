@@ -1,0 +1,50 @@
+name: TidesDB Go CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tidesdb-go repo
+        uses: actions/checkout@v4
+        with:
+          repository: tidesdb/tidesdb-go
+          path: tidesdb-go
+
+      - name: Checkout tidesdb repo
+        uses: actions/checkout@v4
+        with:
+          repository: tidesdb/tidesdb
+          path: tidesdb
+
+      - name: Install libzstd-dev,liblz4-dev and libsnappy-dev
+        run: |
+          sudo apt update
+          sudo apt install -y libzstd-dev liblz4-dev libsnappy-dev
+
+      - name: configure cmake build for tidesdb
+        run: |
+          cd tidesdb
+          cmake -DTIDESDB_WITH_SANITIZER=OFF --debug-output  -S . -B build
+          cmake --build build
+          sudo cmake --install build
+          sudo ldconfig
+
+      - name: Install Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+
+      - name: Build and test tidesdb-go
+        run: |
+          cd tidesdb-go
+          go mod tidy
+          go test ./...
