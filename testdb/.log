@@ -1,0 +1,8 @@
+[2025-01-11 17:39:37] Block indices enabled
+[2025-01-11 17:39:37] Initialized new TidesDB instance at testdb
+[2025-01-11 17:39:37] Available memory: 4124732784 bytes
+[2025-01-11 17:39:37] Available threads: 16
+[2025-01-11 17:39:37] Opened TidesDB instance at testdb
+[2025-01-11 17:39:37] New column family created test_cf
+[2025-01-11 17:39:37] Dropped column family test_cf
+[2025-01-11 17:39:37] Closing TidesDB instance at testdb
