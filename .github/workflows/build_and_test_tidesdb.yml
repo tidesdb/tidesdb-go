@@ -33,8 +33,10 @@ jobs:
       - name: configure cmake build for tidesdb
         run: |
           cd tidesdb
-          cmake -DTIDESDB_WITH_SANITIZER=OFF --debug-output  -S . -B build && make -C build/
+          cmake -DTIDESDB_WITH_SANITIZER=OFF --debug-output  -S . -B build
+          cmake --build build
           sudo cmake --install build
+          sudo ldconfig
 
       - name: Install Go
         uses: actions/setup-go@v4
