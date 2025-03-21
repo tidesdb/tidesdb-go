@@ -84,11 +84,11 @@ func (db *TidesDB) Close() error {
 }
 
 // CreateColumnFamily creates a new column family.
-func (db *TidesDB) CreateColumnFamily(name string, flushThreshold, maxLevel int, probability float32, compressed bool, compressAlgo int, bloomFilter bool, memtableDs int) error {
+func (db *TidesDB) CreateColumnFamily(name string, flushThreshold, maxLevel int, probability float32, compressed bool, compressAlgo int, bloomFilter bool) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	err := C.tidesdb_create_column_family(db.tdb, cName, C.int(flushThreshold), C.int(maxLevel), C.float(probability), C.bool(compressed), C.tidesdb_compression_algo_t(compressAlgo), C.bool(bloomFilter), C.tidesdb_memtable_ds_t(memtableDs))
+	err := C.tidesdb_create_column_family(db.tdb, cName, C.int(flushThreshold), C.int(maxLevel), C.float(probability), C.bool(compressed), C.tidesdb_compression_algo_t(compressAlgo), C.bool(bloomFilter))
 	if err != nil {
 		return errors.New(C.GoString(err.message))
 	}
@@ -301,12 +301,12 @@ func (txn *Transaction) Free() error {
 	return nil
 }
 
-// StartBackgroundPartialMerge starts a background partial merge for a column family.  Will run in background until db closure.  Will merge pairs incrementally and only once min sstables are has been reached.
-func (db *TidesDB) StartBackgroundPartialMerge(columnFamilyName string, seconds, minSSTables int) error {
+// StartIncrementalMerge starts a background incremental merges for a column family.  Will run in background until db closure.  Will merge pairs incrementally and only once min sstables are has been reached.
+func (db *TidesDB) StartIncrementalMerge(columnFamilyName string, seconds, minSSTables int) error {
 	cfName := C.CString(columnFamilyName)
 	defer C.free(unsafe.Pointer(cfName))
 
-	err := C.tidesdb_start_background_partial_merge(db.tdb, cfName, C.int(seconds), C.int(minSSTables))
+	err := C.tidesdb_start_incremental_merge(db.tdb, cfName, C.int(seconds), C.int(minSSTables))
 	if err != nil {
 		return errors.New(C.GoString(err.message))
 	}

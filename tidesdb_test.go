@@ -43,7 +43,7 @@ func TestCreateDropColumnFamily(t *testing.T) {
 	}
 	defer db.Close()
 
-	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true, int(TDB_MEMTABLE_SKIP_LIST))
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestPutGetDelete(t *testing.T) {
 	}
 	defer db.Close()
 
-	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true, int(TDB_MEMTABLE_SKIP_LIST))
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestTransaction(t *testing.T) {
 	}
 	defer db.Close()
 
-	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true, int(TDB_MEMTABLE_SKIP_LIST))
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
