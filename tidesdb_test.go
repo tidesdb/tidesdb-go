@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -167,6 +168,185 @@ func TestTransaction(t *testing.T) {
 
 	if string(gotValue) != string(value) {
 		t.Fatalf("Expected value %s, got %s", value, gotValue)
+	}
+}
+
+func TestRange(t *testing.T) {
+	defer os.RemoveAll("testdb")
+	db, err := Open("testdb")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	defer db.DropColumnFamily("test_cf")
+
+	// Insert several key-value pairs with clear min/max boundaries
+	pairs := map[string]string{
+		"a_key1": "value1",
+		"b_key2": "value2",
+		"c_key3": "value3",
+		"d_key4": "value4",
+		"e_key5": "value5",
+	}
+
+	// Insert in sorted order to ensure predictable range results
+	keys := []string{"a_key1", "b_key2", "c_key3", "d_key4", "e_key5"}
+	for _, key := range keys {
+		err = db.Put("test_cf", []byte(key), []byte(pairs[key]), -1)
+		if err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	// Test specific range query (b_key2 to d_key4)
+	rangePairs, err := db.Range("test_cf", []byte("b_key2"), []byte("d_key4"))
+	if err != nil {
+		t.Fatalf("Failed to get range: %v", err)
+	}
+
+	// We expect b_key2, c_key3, d_key4 to be returned
+	expectedCount := 3
+	if len(rangePairs) != expectedCount {
+		t.Fatalf("Expected %d pairs, got %d", expectedCount, len(rangePairs))
+	}
+
+	// Verify the returned key-value pairs
+	for i, pair := range rangePairs {
+		key := string(pair[0])
+		value := string(pair[1])
+		expectedKey := keys[i+1] // Start from b_key2
+		expectedValue := pairs[expectedKey]
+
+		if key != expectedKey || value != expectedValue {
+			t.Fatalf("Expected (%s, %s), got (%s, %s)", expectedKey, expectedValue, key, value)
+		}
+	}
+
+	// Test range query for a prefix (all keys starting with "c_")
+	rangePairs, err = db.Range("test_cf", []byte("c_"), []byte("c`")) // '`' is just after '_' in ASCII
+	if err != nil {
+		t.Fatalf("Failed to get prefix range: %v", err)
+	}
+
+	// We expect only c_key3 to be returned
+	expectedCount = 1
+	if len(rangePairs) != expectedCount {
+		t.Fatalf("Expected %d pairs for prefix query, got %d", expectedCount, len(rangePairs))
+	}
+
+	// Test range query with minimum key to a specific key
+	rangePairs, err = db.Range("test_cf", []byte("a_key1"), []byte("c_key3"))
+	if err != nil {
+		t.Fatalf("Failed to get range from minimum: %v", err)
+	}
+
+	// We expect a_key1, b_key2, c_key3 to be returned
+	expectedCount = 3
+	if len(rangePairs) != expectedCount {
+		t.Fatalf("Expected %d pairs for min range, got %d", expectedCount, len(rangePairs))
+	}
+
+	// Test range query with a specific key to maximum key
+	rangePairs, err = db.Range("test_cf", []byte("d_key4"), []byte("e_key5"))
+	if err != nil {
+		t.Fatalf("Failed to get range to maximum: %v", err)
+	}
+
+	// We expect d_key4, e_key5 to be returned
+	expectedCount = 2
+	if len(rangePairs) != expectedCount {
+		t.Fatalf("Expected %d pairs for max range, got %d", expectedCount, len(rangePairs))
+	}
+
+	// Test full range query (first to last key)
+	rangePairs, err = db.Range("test_cf", []byte("a_key1"), []byte("e_key5"))
+	if err != nil {
+		t.Fatalf("Failed to get full range: %v", err)
+	}
+
+	// We expect all 5 keys to be returned
+	expectedCount = 5
+	if len(rangePairs) != expectedCount {
+		t.Fatalf("Expected %d pairs for full range, got %d", expectedCount, len(rangePairs))
+	}
+}
+
+func TestDeleteByRange(t *testing.T) {
+	defer os.RemoveAll("testdb")
+	db, err := Open("testdb")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	defer db.DropColumnFamily("test_cf")
+
+	// Insert several key-value pairs with clear min/max boundaries
+	pairs := map[string]string{
+		"a_key1": "value1",
+		"b_key2": "value2",
+		"c_key3": "value3",
+		"d_key4": "value4",
+		"e_key5": "value5",
+	}
+
+	// Insert in sorted order
+	keys := []string{"a_key1", "b_key2", "c_key3", "d_key4", "e_key5"}
+	for _, key := range keys {
+		err = db.Put("test_cf", []byte(key), []byte(pairs[key]), -1)
+		if err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	// Delete a range of keys (b_key2 to d_key4)
+	err = db.DeleteByRange("test_cf", []byte("b_key2"), []byte("d_key4"))
+	if err != nil {
+		t.Fatalf("Failed to delete range: %v", err)
+	}
+
+	// Verify that the keys in the range were deleted
+	for _, key := range []string{"b_key2", "c_key3", "d_key4"} {
+		_, err := db.Get("test_cf", []byte(key))
+		if err == nil {
+			t.Fatalf("Key %s should be deleted but still exists", key)
+		}
+
+		if !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("Unexpected error when getting deleted key: %v", err)
+		}
+	}
+
+	// Verify that keys outside the range still exist
+	for _, key := range []string{"a_key1", "e_key5"} {
+		val, err := db.Get("test_cf", []byte(key))
+		if err != nil {
+			t.Fatalf("Key %s should exist but got error: %v", key, err)
+		}
+		if string(val) != pairs[key] {
+			t.Fatalf("Expected value %s for key %s, got %s", pairs[key], key, string(val))
+		}
+	}
+
+	// Test deleting a non-existent range (should succeed without error)
+	err = db.DeleteByRange("test_cf", []byte("x_key"), []byte("z_key"))
+	if err != nil {
+		t.Fatalf("DeleteByRange for non-existent range should succeed, got error: %v", err)
+	}
+
+	// Test deleting a range in a non-existent column family (should fail)
+	err = db.DeleteByRange("nonexistent_cf", []byte("a_key"), []byte("b_key"))
+	if err == nil {
+		t.Fatalf("DeleteByRange in non-existent column family should fail")
 	}
 }
 

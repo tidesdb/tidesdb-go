@@ -71,6 +71,14 @@ if err != nil {
 }
 ```
 
+##### Deleting by range
+```go
+// Delete all key-value pairs between "start_key" and "end_key" atomically
+err := db.DeleteByRange("example_cf", []byte("start_key"), []byte("end_key"))
+if err != nil {
+...
+}
+```
 
 #### Iterating over data
 ```go
@@ -111,6 +119,23 @@ if err != nil {
 ...
 }
 ```
+
+#### Range queries
+```go
+// Get all key-value pairs between "start_key" and "end_key"
+pairs, err := db.Range("example_cf", []byte("start_key"), []byte("end_key"))
+if err != nil {
+...
+}
+
+for _, pair := range pairs {
+    key := pair[0]
+    value := pair[1]
+    fmt.Printf("Key: %s, Value: %s\n", key, value)
+}
+```
+
+
 
 #### Compaction
 Compaction is done manually or in background.
