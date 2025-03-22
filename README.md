@@ -112,7 +112,7 @@ if err != nil {
 ...
 }
 
-// You can also do txn.Delete()
+// You can also use txn.Delete(), txn.Get()
 
 err = txn.Commit()
 if err != nil {
