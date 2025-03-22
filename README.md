@@ -138,13 +138,13 @@ for _, pair := range pairs {
 
 
 #### Compaction
-Compaction is done manually or in background.
+Compaction is done manually or in background incrementally.
 
-Merging operations, pair and merge sstables, removing expired keys if TTL set and tombstoned data; Say you have 100 sstables these methods will compact to 50 sstables.
+Merging operations, pair and merge sstables, removing expired keys if TTL set and tombstoned data.
 
 ##### Manual
 ```go
-err := db.CompactSSTables("example_cf", 4) // 4 is the number of threads to use for compaction
+err := db.CompactSSTables("example_cf", 4) // 4 is the number of threads to use for compaction. Each thread will compact a pair of sstables.
 if err != nil {
     ...
 }
@@ -152,7 +152,7 @@ if err != nil {
 
 ##### Background
 ```go
-err := db.StartIncrementalMerge("example_cf", 60, 1000) // merge a pair every 60 seconds only when we have a minimum of 1000 sstables
+err := db.StartIncrementalMerge("example_cf", 60, 1000) // merge a pair of sstables starting at oldest pair every 60 seconds only when we have a minimum of 1000 sstables
 if err != nil {
 ...
 }
