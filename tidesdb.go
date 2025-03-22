@@ -27,14 +27,6 @@ import (
 	"unsafe"
 )
 
-// TidesDBMemtableDS represents the data structure type for the memtable.
-type TidesDBMemtableDS int
-
-const (
-	TDB_MEMTABLE_SKIP_LIST  TidesDBMemtableDS = iota // a skip list data structure for the memtable
-	TDB_MEMTABLE_HASH_TABLE                          // a hash table data structure for the memtable
-)
-
 // TidesDBCompressionAlgo represents the compression algorithm type.
 type TidesDBCompressionAlgo int
 
@@ -263,6 +255,22 @@ func (txn *Transaction) Put(key, value []byte, ttl int64) error {
 	return nil
 }
 
+// Get gets a value in the transaction.
+func (txn *Transaction) Get(key []byte) ([]byte, error) {
+	cKey := (*C.uint8_t)(unsafe.Pointer(&key[0]))
+
+	var cValue *C.uint8_t
+	var cValueSize C.size_t
+
+	err := C.tidesdb_txn_get(txn.txn, cKey, C.size_t(len(key)), &cValue, &cValueSize)
+	if err != nil {
+		return nil, errors.New(C.GoString(err.message))
+	}
+
+	value := C.GoBytes(unsafe.Pointer(cValue), C.int(cValueSize))
+	return value, nil
+}
+
 // Delete removes a key-value pair from the transaction.
 func (txn *Transaction) Delete(key []byte) error {
 	cKey := (*C.uint8_t)(unsafe.Pointer(&key[0]))
@@ -310,5 +318,86 @@ func (db *TidesDB) StartIncrementalMerge(columnFamilyName string, seconds, minSS
 	if err != nil {
 		return errors.New(C.GoString(err.message))
 	}
+	return nil
+}
+
+// Range retrieves all key-value pairs within a specified range.
+func (db *TidesDB) Range(columnFamilyName string, startKey, endKey []byte) ([][2][]byte, error) {
+	cfName := C.CString(columnFamilyName)
+	defer C.free(unsafe.Pointer(cfName))
+
+	var cStartKey, cEndKey *C.uint8_t
+	var cStartKeySize, cEndKeySize C.size_t
+
+	if len(startKey) > 0 {
+		cStartKey = (*C.uint8_t)(unsafe.Pointer(&startKey[0]))
+		cStartKeySize = C.size_t(len(startKey))
+	}
+
+	if len(endKey) > 0 {
+		cEndKey = (*C.uint8_t)(unsafe.Pointer(&endKey[0]))
+		cEndKeySize = C.size_t(len(endKey))
+	}
+
+	var result **C.tidesdb_key_value_pair_t
+	var resultSize C.size_t
+
+	err := C.tidesdb_range(db.tdb, cfName, cStartKey, cStartKeySize,
+		cEndKey, cEndKeySize, &result, &resultSize)
+
+	if err != nil {
+		return nil, errors.New(C.GoString(err.message))
+	}
+
+	// Convert C result to Go
+	size := int(resultSize)
+	pairs := make([][2][]byte, size)
+
+	resultSlice := (*[1 << 30]*C.tidesdb_key_value_pair_t)(unsafe.Pointer(result))[:size:size]
+
+	for i := 0; i < size; i++ {
+		kvPair := resultSlice[i]
+
+		// Copy key and value to Go slices
+		pairs[i][0] = C.GoBytes(unsafe.Pointer(kvPair.key), C.int(kvPair.key_size))
+		pairs[i][1] = C.GoBytes(unsafe.Pointer(kvPair.value), C.int(kvPair.value_size))
+	}
+
+	for i := 0; i < size; i++ {
+		// Free individual key-value pairs
+		C.free(unsafe.Pointer(resultSlice[i]))
+	}
+
+	// Free the array itself
+	C.free(unsafe.Pointer(result))
+
+	return pairs, nil
+}
+
+// DeleteByRange deletes all key-value pairs within a specified range atomically.
+func (db *TidesDB) DeleteByRange(columnFamilyName string, startKey, endKey []byte) error {
+	cfName := C.CString(columnFamilyName)
+	defer C.free(unsafe.Pointer(cfName))
+
+	var cStartKey, cEndKey *C.uint8_t
+	var cStartKeySize, cEndKeySize C.size_t
+
+	if len(startKey) > 0 {
+		cStartKey = (*C.uint8_t)(unsafe.Pointer(&startKey[0]))
+		cStartKeySize = C.size_t(len(startKey))
+	}
+
+	if len(endKey) > 0 {
+		cEndKey = (*C.uint8_t)(unsafe.Pointer(&endKey[0]))
+		cEndKeySize = C.size_t(len(endKey))
+	}
+
+	err := C.tidesdb_delete_by_range(db.tdb, cfName, cStartKey, cStartKeySize,
+		cEndKey, cEndKeySize)
+
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+
 	return nil
 }
