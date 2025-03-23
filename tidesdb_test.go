@@ -360,16 +360,21 @@ func TestGetColumnFamilyStat(t *testing.T) {
 	defer db.Close()
 
 	// Create a column family with specific settings
-	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true)
+	err = db.CreateColumnFamily("test_cf", (1024*1024)*2, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	defer db.DropColumnFamily("test_cf")
 
 	// Add some data to create SSTables
 	for i := 0; i < 100; i++ {
 		key := []byte(fmt.Sprintf("key%d", i))
 		value := []byte(fmt.Sprintf("value%d", i))
+
+		for len(value) < 1024*256 {
+			value = append(value, 0)
+
+		}
+
 		err = db.Put("test_cf", key, value, -1)
 		if err != nil {
 			t.Fatalf("Failed to put key-value pair: %v", err)
@@ -386,8 +391,8 @@ func TestGetColumnFamilyStat(t *testing.T) {
 	if stat.Config.Name != "test_cf" {
 		t.Errorf("Expected column family name 'test_cf', got '%s'", stat.Config.Name)
 	}
-	if stat.Config.FlushThreshold != 1024*1024*64 {
-		t.Errorf("Expected flush threshold %d, got %d", 1024*1024*64, stat.Config.FlushThreshold)
+	if stat.Config.FlushThreshold != (1024*1024)*2 {
+		t.Errorf("Expected flush threshold %d, got %d", (1024*1024)*2, stat.Config.FlushThreshold)
 	}
 	if stat.Config.MaxLevel != 12 {
 		t.Errorf("Expected max level 12, got %d", stat.Config.MaxLevel)
@@ -418,9 +423,6 @@ func TestGetColumnFamilyStat(t *testing.T) {
 	// Check if there are SSTables (may not be any if memtable hasn't been flushed)
 	t.Logf("Number of SSTables: %d", stat.NumSSTables)
 
-	// Force a flush to create SSTables (if available in the API)
-	// This is optional and depends on your implementation
-
 	// If there are SSTables, verify their stats
 	if stat.NumSSTables > 0 {
 		for i, sstStat := range stat.SSTableStats {
@@ -443,6 +445,7 @@ func TestGetColumnFamilyStat(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Expected error when getting stats for non-existent column family")
 	}
+
 }
 
 // More tests to be added...

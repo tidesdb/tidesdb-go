@@ -442,23 +442,28 @@ func (db *TidesDB) GetColumnFamilyStat(columnFamilyName string) (*ColumnFamilySt
 		return nil, errors.New(C.GoString(err.message))
 	}
 
-	// Immediately capture all string values to ensure they're not invalidated
+	var stat *ColumnFamilyStat
+
+	defer func() {
+		if cStat != nil {
+			C.tidesdb_free_column_family_stat(cStat)
+		}
+	}()
+
 	configName := C.GoString(cStat.config.name)
 	cfNameVal := C.GoString(cStat.cf_name)
 
-	// Capture SSTable paths if available
 	var ssTablePaths []string
+	var cSSTableStatSlice []*C.tidesdb_column_family_sstable_stat_t
 	if cStat.sstable_stats != nil && cStat.num_sstables > 0 {
+		cSSTableStatSlice = (*[1 << 30]*C.tidesdb_column_family_sstable_stat_t)(unsafe.Pointer(cStat.sstable_stats))[:int(cStat.num_sstables):int(cStat.num_sstables)]
 		ssTablePaths = make([]string, int(cStat.num_sstables))
-		cSSTableStatSlice := (*[1 << 30]*C.tidesdb_column_family_sstable_stat_t)(unsafe.Pointer(cStat.sstable_stats))[:int(cStat.num_sstables):int(cStat.num_sstables)]
-
 		for i := 0; i < int(cStat.num_sstables); i++ {
 			ssTablePaths[i] = C.GoString(cSSTableStatSlice[i].sstable_path)
 		}
 	}
 
-	// Create a Go struct from the C struct
-	stat := &ColumnFamilyStat{
+	stat = &ColumnFamilyStat{
 		Config: ColumnFamilyConfig{
 			Name:           configName,
 			FlushThreshold: int32(cStat.config.flush_threshold),
@@ -475,11 +480,8 @@ func (db *TidesDB) GetColumnFamilyStat(columnFamilyName string) (*ColumnFamilySt
 		IncrementalMerging: bool(cStat.incremental_merging),
 	}
 
-	// If there are SSTable stats, convert them too
 	if cStat.sstable_stats != nil && cStat.num_sstables > 0 {
 		stat.SSTableStats = make([]*ColumnFamilySSTableStat, int(cStat.num_sstables))
-		cSSTableStatSlice := (*[1 << 30]*C.tidesdb_column_family_sstable_stat_t)(unsafe.Pointer(cStat.sstable_stats))[:int(cStat.num_sstables):int(cStat.num_sstables)]
-
 		for i := 0; i < int(cStat.num_sstables); i++ {
 			stat.SSTableStats[i] = &ColumnFamilySSTableStat{
 				Path:      ssTablePaths[i],
@@ -487,12 +489,6 @@ func (db *TidesDB) GetColumnFamilyStat(columnFamilyName string) (*ColumnFamilySt
 				NumBlocks: int64(cSSTableStatSlice[i].num_blocks),
 			}
 		}
-	}
-
-	// Free the C struct
-	freeErr := C.tidesdb_free_column_family_stat(cStat)
-	if freeErr != nil {
-		return nil, errors.New(C.GoString(freeErr.message))
 	}
 
 	return stat, nil
