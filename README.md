@@ -135,7 +135,46 @@ for _, pair := range pairs {
 }
 ```
 
+#### Getting Column Family Statistics
+You can retrieve detailed statistics about a column family using the `GetColumnFamilyStat` method.
 
+```go
+stat, err := db.GetColumnFamilyStat("example_cf")
+if err != nil {
+    ...
+}
+
+// Access various statistics about the column family
+fmt.Printf("Column Family: %s\n", stat.Name)
+fmt.Printf("Memtable Size: %d bytes\n", stat.MemtableSize)
+fmt.Printf("Memtable Entries: %d\n", stat.MemtableEntryCount)
+fmt.Printf("Number of SSTables: %d\n", stat.NumSSTables)
+fmt.Printf("Incremental Merging: %t\n", stat.IncrementalMerging)
+
+// Access configuration details
+fmt.Printf("Flush Threshold: %d\n", stat.Config.FlushThreshold)
+fmt.Printf("Max Level: %d\n", stat.Config.MaxLevel)
+fmt.Printf("Probability: %f\n", stat.Config.Probability)
+fmt.Printf("Compressed: %t\n", stat.Config.Compressed)
+fmt.Printf("Bloom Filter: %t\n", stat.Config.BloomFilter)
+
+// Access SSTable statistics
+for i, sstStat := range stat.SSTableStats {
+    fmt.Printf("SSTable %d - Path: %s, Size: %d bytes, Blocks: %d\n",
+    i, sstStat.Path, sstStat.Size, sstStat.NumBlocks)
+}
+```
+
+#### Listing Column Families
+You can retrieve a list of all column families.
+```go
+cfList, err := db.ListColumnFamilies()
+if err != nil {
+...
+}
+
+fmt.Println("Available column families:", cfList)
+```
 
 #### Compaction
 Compaction is done manually or in background incrementally.

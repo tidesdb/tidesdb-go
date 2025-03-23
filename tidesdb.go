@@ -52,6 +52,35 @@ type Transaction struct {
 	txn *C.tidesdb_txn_t
 }
 
+// ColumnFamilyConfig represents the configuration for a column family.
+type ColumnFamilyConfig struct {
+	Name           string
+	FlushThreshold int32
+	MaxLevel       int32
+	Probability    float32
+	Compressed     bool
+	CompressAlgo   TidesDBCompressionAlgo
+	BloomFilter    bool
+}
+
+// ColumnFamilySSTableStat represents statistics about an SSTable in a column family.
+type ColumnFamilySSTableStat struct {
+	Path      string
+	Size      int64
+	NumBlocks int64
+}
+
+// ColumnFamilyStat represents statistics about a column family.
+type ColumnFamilyStat struct {
+	Config             ColumnFamilyConfig
+	Name               string
+	NumSSTables        int
+	MemtableSize       int64
+	MemtableEntryCount int64
+	IncrementalMerging bool
+	SSTableStats       []*ColumnFamilySSTableStat
+}
+
 // Open opens a TidesDB instance.
 func Open(directory string) (*TidesDB, error) {
 	cDir := C.CString(directory)
@@ -400,4 +429,71 @@ func (db *TidesDB) DeleteByRange(columnFamilyName string, startKey, endKey []byt
 	}
 
 	return nil
+}
+
+// GetColumnFamilyStat retrieves statistics about a column family.
+func (db *TidesDB) GetColumnFamilyStat(columnFamilyName string) (*ColumnFamilyStat, error) {
+	cfName := C.CString(columnFamilyName)
+	defer C.free(unsafe.Pointer(cfName))
+
+	var cStat *C.tidesdb_column_family_stat_t
+	err := C.tidesdb_get_column_family_stat(db.tdb, cfName, &cStat)
+	if err != nil {
+		return nil, errors.New(C.GoString(err.message))
+	}
+
+	// Immediately capture all string values to ensure they're not invalidated
+	configName := C.GoString(cStat.config.name)
+	cfNameVal := C.GoString(cStat.cf_name)
+
+	// Capture SSTable paths if available
+	var ssTablePaths []string
+	if cStat.sstable_stats != nil && cStat.num_sstables > 0 {
+		ssTablePaths = make([]string, int(cStat.num_sstables))
+		cSSTableStatSlice := (*[1 << 30]*C.tidesdb_column_family_sstable_stat_t)(unsafe.Pointer(cStat.sstable_stats))[:int(cStat.num_sstables):int(cStat.num_sstables)]
+
+		for i := 0; i < int(cStat.num_sstables); i++ {
+			ssTablePaths[i] = C.GoString(cSSTableStatSlice[i].sstable_path)
+		}
+	}
+
+	// Create a Go struct from the C struct
+	stat := &ColumnFamilyStat{
+		Config: ColumnFamilyConfig{
+			Name:           configName,
+			FlushThreshold: int32(cStat.config.flush_threshold),
+			MaxLevel:       int32(cStat.config.max_level),
+			Probability:    float32(cStat.config.probability),
+			Compressed:     bool(cStat.config.compressed),
+			CompressAlgo:   TidesDBCompressionAlgo(cStat.config.compress_algo),
+			BloomFilter:    bool(cStat.config.bloom_filter),
+		},
+		Name:               cfNameVal,
+		NumSSTables:        int(cStat.num_sstables),
+		MemtableSize:       int64(cStat.memtable_size),
+		MemtableEntryCount: int64(cStat.memtable_entries_count),
+		IncrementalMerging: bool(cStat.incremental_merging),
+	}
+
+	// If there are SSTable stats, convert them too
+	if cStat.sstable_stats != nil && cStat.num_sstables > 0 {
+		stat.SSTableStats = make([]*ColumnFamilySSTableStat, int(cStat.num_sstables))
+		cSSTableStatSlice := (*[1 << 30]*C.tidesdb_column_family_sstable_stat_t)(unsafe.Pointer(cStat.sstable_stats))[:int(cStat.num_sstables):int(cStat.num_sstables)]
+
+		for i := 0; i < int(cStat.num_sstables); i++ {
+			stat.SSTableStats[i] = &ColumnFamilySSTableStat{
+				Path:      ssTablePaths[i],
+				Size:      int64(cSSTableStatSlice[i].size),
+				NumBlocks: int64(cSSTableStatSlice[i].num_blocks),
+			}
+		}
+	}
+
+	// Free the C struct
+	freeErr := C.tidesdb_free_column_family_stat(cStat)
+	if freeErr != nil {
+		return nil, errors.New(C.GoString(freeErr.message))
+	}
+
+	return stat, nil
 }
