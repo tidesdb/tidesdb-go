@@ -19,6 +19,7 @@ package tidesdb_go
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -347,6 +348,100 @@ func TestDeleteByRange(t *testing.T) {
 	err = db.DeleteByRange("nonexistent_cf", []byte("a_key"), []byte("b_key"))
 	if err == nil {
 		t.Fatalf("DeleteByRange in non-existent column family should fail")
+	}
+}
+
+func TestGetColumnFamilyStat(t *testing.T) {
+	defer os.RemoveAll("testdb")
+	db, err := Open("testdb")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a column family with specific settings
+	err = db.CreateColumnFamily("test_cf", 1024*1024*64, 12, 0.24, true, int(TDB_COMPRESS_SNAPPY), true)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	defer db.DropColumnFamily("test_cf")
+
+	// Add some data to create SSTables
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key%d", i))
+		value := []byte(fmt.Sprintf("value%d", i))
+		err = db.Put("test_cf", key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	// Get column family statistics
+	stat, err := db.GetColumnFamilyStat("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family statistics: %v", err)
+	}
+
+	// Verify column family config
+	if stat.Config.Name != "test_cf" {
+		t.Errorf("Expected column family name 'test_cf', got '%s'", stat.Config.Name)
+	}
+	if stat.Config.FlushThreshold != 1024*1024*64 {
+		t.Errorf("Expected flush threshold %d, got %d", 1024*1024*64, stat.Config.FlushThreshold)
+	}
+	if stat.Config.MaxLevel != 12 {
+		t.Errorf("Expected max level 12, got %d", stat.Config.MaxLevel)
+	}
+	if !stat.Config.Compressed {
+		t.Errorf("Expected compressed to be true, got false")
+	}
+	if stat.Config.CompressAlgo != TDB_COMPRESS_SNAPPY {
+		t.Errorf("Expected compression algorithm %d, got %d", TDB_COMPRESS_SNAPPY, stat.Config.CompressAlgo)
+	}
+	if !stat.Config.BloomFilter {
+		t.Errorf("Expected bloom filter to be true, got false")
+	}
+
+	// Verify column family name
+	if stat.Name != "test_cf" {
+		t.Errorf("Expected column family name 'test_cf', got '%s'", stat.Name)
+	}
+
+	// Verify memtable stats (values will vary, just check existence)
+	if stat.MemtableSize <= 0 {
+		t.Logf("Memtable size: %d", stat.MemtableSize)
+	}
+	if stat.MemtableEntryCount <= 0 {
+		t.Logf("Memtable entries count: %d", stat.MemtableEntryCount)
+	}
+
+	// Check if there are SSTables (may not be any if memtable hasn't been flushed)
+	t.Logf("Number of SSTables: %d", stat.NumSSTables)
+
+	// Force a flush to create SSTables (if available in the API)
+	// This is optional and depends on your implementation
+
+	// If there are SSTables, verify their stats
+	if stat.NumSSTables > 0 {
+		for i, sstStat := range stat.SSTableStats {
+			if sstStat.Path == "" {
+				t.Errorf("SSTable %d has empty path", i)
+			}
+			if sstStat.Size <= 0 {
+				t.Errorf("SSTable %d has invalid size: %d", i, sstStat.Size)
+			}
+			if sstStat.NumBlocks <= 0 {
+				t.Errorf("SSTable %d has invalid block count: %d", i, sstStat.NumBlocks)
+			}
+			t.Logf("SSTable %d: Path=%s, Size=%d, NumBlocks=%d",
+				i, sstStat.Path, sstStat.Size, sstStat.NumBlocks)
+		}
+	}
+
+	// Test non-existent column family
+	_, err = db.GetColumnFamilyStat("nonexistent_cf")
+	if err == nil {
+		t.Fatalf("Expected error when getting stats for non-existent column family")
 	}
 }
 
