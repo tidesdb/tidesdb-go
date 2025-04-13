@@ -47,6 +47,11 @@ type Cursor struct {
 	cursor *C.tidesdb_cursor_t
 }
 
+// MergeCursor represents a TidesDB merge cursor that keeps keys sorted across memtable and SSTables.
+type MergeCursor struct {
+	cursor *C.tidesdb_merge_cursor_t
+}
+
 // Transaction represents a TidesDB transaction.
 type Transaction struct {
 	txn *C.tidesdb_txn_t
@@ -492,4 +497,63 @@ func (db *TidesDB) GetColumnFamilyStat(columnFamilyName string) (*ColumnFamilySt
 	}
 
 	return stat, nil
+}
+
+// MergeCursorInit initializes a new TidesDB merge cursor that keeps keys sorted across all sources.
+func (db *TidesDB) MergeCursorInit(columnFamily string) (*MergeCursor, error) {
+	cfName := C.CString(columnFamily)
+	defer C.free(unsafe.Pointer(cfName))
+
+	var cursor *C.tidesdb_merge_cursor_t
+	err := C.tidesdb_merge_cursor_init(db.tdb, cfName, &cursor)
+	if err != nil {
+		return nil, errors.New(C.GoString(err.message))
+	}
+
+	return &MergeCursor{cursor: cursor}, nil
+}
+
+// Next moves the merge cursor to the next key-value pair.
+func (c *MergeCursor) Next() error {
+	err := C.tidesdb_merge_cursor_next(c.cursor)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// Prev moves the merge cursor to the previous key-value pair.
+func (c *MergeCursor) Prev() error {
+	err := C.tidesdb_merge_cursor_prev(c.cursor)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
+}
+
+// Get gets the current key-value pair from the merge cursor.
+func (c *MergeCursor) Get() ([]byte, []byte, error) {
+	var cKey *C.uint8_t
+	var cKeySize C.size_t
+	var cValue *C.uint8_t
+	var cValueSize C.size_t
+
+	err := C.tidesdb_merge_cursor_get(c.cursor, &cKey, &cKeySize, &cValue, &cValueSize)
+	if err != nil {
+		return nil, nil, errors.New(C.GoString(err.message))
+	}
+
+	key := C.GoBytes(unsafe.Pointer(cKey), C.int(cKeySize))
+	value := C.GoBytes(unsafe.Pointer(cValue), C.int(cValueSize))
+
+	return key, value, nil
+}
+
+// Free frees the memory for the merge cursor.
+func (c *MergeCursor) Free() error {
+	err := C.tidesdb_merge_cursor_free(c.cursor)
+	if err != nil {
+		return errors.New(C.GoString(err.message))
+	}
+	return nil
 }
