@@ -99,6 +99,57 @@ cursor.Next() // or cursor.Prev()
 }
 ```
 
+#### Merge Cursor
+The merge cursor provides a unified view across both memtable and all SSTables, ensuring proper sorting order.
+
+```go
+// Initialize a merge cursor
+mergeCursor, err := db.MergeCursorInit("example_cf")
+if err != nil {
+    // Handle error
+}
+
+defer mergeCursor.Free()
+
+// Iterate forward through all sorted key-value pairs
+for {
+    key, value, err := mergeCursor.Get()
+    if err != nil {
+        break // End of data or error
+    }
+
+    fmt.Printf("Key: %s, Value: %s\n", key, value)
+
+    // Move to next entry
+    if err := mergeCursor.Next(); err != nil {
+        break
+    }
+}
+
+// Or iterate backward
+mergeCursor, err = db.MergeCursorInit("example_cf")
+if err != nil {
+    // Handle error
+}
+
+defer mergeCursor.Free()
+
+for {
+    key, value, err := mergeCursor.Get()
+    if err != nil {
+        break
+    }
+
+    fmt.Printf("Key: %s, Value: %s\n", key, value)
+
+    if err := mergeCursor.Prev(); err != nil {
+        break
+    }
+}
+
+
+```
+
 #### Transactions
 ```go
 txn, err := db.BeginTxn("example_cf")
