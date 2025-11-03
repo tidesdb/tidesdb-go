@@ -9,8 +9,11 @@ on:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout tidesdb-go repo
@@ -25,18 +28,53 @@ jobs:
           repository: tidesdb/tidesdb
           path: tidesdb
 
-      - name: Install libzstd-dev,liblz4-dev and libsnappy-dev
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt update
           sudo apt install -y libzstd-dev liblz4-dev libsnappy-dev
 
-      - name: configure cmake build for tidesdb
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install zstd lz4 snappy
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+          vcpkg install zstd lz4 snappy
+
+      - name: Configure and build tidesdb (Linux)
+        if: runner.os == 'Linux'
         run: |
           cd tidesdb
-          cmake -DTIDESDB_WITH_SANITIZER=OFF --debug-output  -S . -B build
+          cmake -DTIDESDB_WITH_SANITIZER=OFF --debug-output -S . -B build
           cmake --build build
           sudo cmake --install build
-          sudo ldconfig
+
+      - name: Configure and build tidesdb (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd tidesdb
+          export HOMEBREW_PREFIX=$(brew --prefix)
+          cmake -DTIDESDB_WITH_SANITIZER=OFF \
+                -DCMAKE_PREFIX_PATH="${HOMEBREW_PREFIX}" \
+                --debug-output -S . -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Update library cache (Linux)
+        if: runner.os == 'Linux'
+        run: sudo ldconfig
+
+      - name: Configure and build tidesdb (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd tidesdb
+          cmake -DTIDESDB_WITH_SANITIZER=OFF -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -S . -B build
+          cmake --build build --config Release
+          cmake --install build --config Release
 
       - name: Install Go
         uses: actions/setup-go@v4
