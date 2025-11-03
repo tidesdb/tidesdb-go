@@ -58,6 +58,37 @@ brew install zstd lz4 snappy openssl
 go get github.com/tidesdb/tidesdb-go
 ```
 
+### Custom Installation Paths
+
+If you installed TidesDB to a non-standard location, you can specify custom paths using CGO environment variables:
+
+```bash
+# Set custom include and library paths
+export CGO_CFLAGS="-I/custom/path/include"
+export CGO_LDFLAGS="-L/custom/path/lib -ltidesdb"
+
+# Then install/build
+go get github.com/tidesdb/tidesdb-go
+```
+
+**Example: Custom prefix installation**
+```bash
+# Install TidesDB to custom location
+cd tidesdb
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/opt/tidesdb
+cmake --build build
+sudo cmake --install build
+
+# Configure Go to use custom location
+export CGO_CFLAGS="-I/opt/tidesdb/include"
+export CGO_LDFLAGS="-L/opt/tidesdb/lib -ltidesdb"
+export LD_LIBRARY_PATH="/opt/tidesdb/lib:$LD_LIBRARY_PATH"  # Linux
+# or
+export DYLD_LIBRARY_PATH="/opt/tidesdb/lib:$DYLD_LIBRARY_PATH"  # macOS
+
+go get github.com/tidesdb/tidesdb-go
+```
+
 ## Usage
 
 ### Opening and Closing a Database

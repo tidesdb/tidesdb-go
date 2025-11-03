@@ -17,10 +17,11 @@
 package tidesdb_go
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/lib -ltidesdb
-#cgo darwin CFLAGS: -I/opt/homebrew/include
-#cgo darwin LDFLAGS: -L/opt/homebrew/lib -L/usr/local/lib -Wl,-rpath,/usr/local/lib
+#cgo LDFLAGS: -ltidesdb
+#cgo darwin LDFLAGS: -L/usr/local/lib -L/opt/homebrew/lib
 #cgo linux LDFLAGS: -lpthread -lm
+#cgo windows CFLAGS: -I"C:/Program Files (x86)/tidesdb/include"
+#cgo windows LDFLAGS: -L"C:/Program Files (x86)/tidesdb/lib" -lws2_32 -lbcrypt
 #include <tidesdb/tidesdb.h>
 #include <stdlib.h>
 */
