@@ -45,11 +45,22 @@ jobs:
           choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
           vcpkg install zstd lz4 snappy
 
-      - name: Configure and build tidesdb (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Configure and build tidesdb (Linux)
+        if: runner.os == 'Linux'
         run: |
           cd tidesdb
           cmake -DTIDESDB_WITH_SANITIZER=OFF --debug-output -S . -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Configure and build tidesdb (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd tidesdb
+          export HOMEBREW_PREFIX=$(brew --prefix)
+          cmake -DTIDESDB_WITH_SANITIZER=OFF \
+                -DCMAKE_PREFIX_PATH="${HOMEBREW_PREFIX}" \
+                --debug-output -S . -B build
           cmake --build build
           sudo cmake --install build
 
