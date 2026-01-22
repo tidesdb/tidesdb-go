@@ -21,8 +21,8 @@ package tidesdb_go
 #cgo darwin CFLAGS: -I/opt/homebrew/include
 #cgo darwin LDFLAGS: -L/opt/homebrew/lib -L/usr/local/lib -Wl,-rpath,/usr/local/lib
 #cgo linux LDFLAGS: -lpthread -lm
-#cgo windows CFLAGS: -IC:/PROGRA~2/tidesdb/include
-#cgo windows LDFLAGS: -LC:/PROGRA~2/tidesdb/lib -lws2_32 -lbcrypt
+#cgo windows CFLAGS: -I/mingw64/include
+#cgo windows LDFLAGS: -L/mingw64/lib -lws2_32 -lbcrypt -lzstd -llz4 -lsnappy
 #include <tidesdb/db.h>
 #include <stdlib.h>
 #include <string.h>

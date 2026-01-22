@@ -49,6 +49,27 @@ sudo apt install libzstd-dev liblz4-dev libsnappy-dev
 brew install zstd lz4 snappy
 ```
 
+**On Windows (MSYS2/MinGW)**
+
+Go's cgo uses MinGW GCC, so TidesDB must be built with MinGW (not MSVC) for compatibility.
+
+```bash
+# Install MSYS2 from https://www.msys2.org/
+# Open MSYS2 MinGW 64-bit terminal
+
+# Install dependencies
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-zstd mingw-w64-x86_64-lz4 mingw-w64-x86_64-snappy
+
+# Build TidesDB with MinGW
+git clone https://github.com/tidesdb/tidesdb.git
+cd tidesdb
+rm -rf build && cmake -S . -B build -G "MinGW Makefiles" -DTIDESDB_WITH_SANITIZER=OFF -DTIDESDB_BUILD_TESTS=OFF
+cmake --build build
+cmake --install build --prefix /mingw64
+```
+
+**Important**: Building TidesDB with MSVC will not work with GO bindings due to ABI incompatibility between MSVC and MinGW.
+
 ### Installation
 
 ```bash
