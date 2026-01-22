@@ -81,7 +81,12 @@ jobs:
         shell: msys2 {0}
         run: |
           cd tidesdb
-          cmake -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=mingw32-make -DTIDESDB_WITH_SANITIZER=OFF -DTIDESDB_BUILD_TESTS=OFF -S . -B build
+          cmake -G "MinGW Makefiles" \
+            -DCMAKE_MAKE_PROGRAM=mingw32-make \
+            -DCMAKE_PREFIX_PATH=/mingw64 \
+            -DTIDESDB_WITH_SANITIZER=OFF \
+            -DTIDESDB_BUILD_TESTS=OFF \
+            -S . -B build
           cmake --build build
           cmake --install build --prefix /mingw64
 
