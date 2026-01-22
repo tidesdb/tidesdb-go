@@ -17,7 +17,7 @@ TidesDB is a fast and efficient key-value storage engine library written in C. T
 - Automatic with configurable thread pools (sorted runs, compaction)
 - Six built-in comparators plus custom registration
 
-For GO usage you can go to the TidesDB GO Reference at [TidesDB GO Reference](https://tidesdb.com/reference/go/).
+For GO usage you can go to the TidesDB GO Reference [here](https://tidesdb.com/reference/go/).
 
 ## License
 
@@ -41,4 +41,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 For issues, questions, or discussions
 - GitHub Issues https://github.com/tidesdb/tidesdb-go/issues
 - Discord Community https://discord.gg/tWEmjR66cy
-- Main TidesDB Repository https://github.com/tidesdb/tidesdb
