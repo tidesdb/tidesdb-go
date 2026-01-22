@@ -15,45 +15,10 @@ jobs:
         include:
           - os: ubuntu-latest
             name: Linux x64
-            arch: x64
-          - os: ubuntu-latest
-            name: Linux x86
-            arch: x86
           - os: macos-latest
             name: macOS x64
-            arch: x64
-          - os: macos-latest
-            name: macOS x86
-            arch: x86
           - os: windows-latest
-            name: Windows MSVC x64
-            compiler: msvc
-            arch: x64
-          - os: windows-latest
-            name: Windows MSVC x86
-            compiler: msvc
-            arch: x86
-          - os: windows-latest
-            name: Windows MinGW x64
-            compiler: mingw
-            arch: x64
-          - os: windows-latest
-            name: Windows MinGW x86
-            compiler: mingw
-            arch: x86
-          - os: ubuntu-latest
-            name: Linux PowerPC 32-bit
-            arch: ppc
-            compiler: gcc-powerpc
-          - os: ubuntu-latest
-            name: macOS 10.6.8 PowerPC G5
-            arch: ppc-macos
-            compiler: gcc-powerpc
-            target_os: macos
-          - os: ubuntu-latest
-            name: Linux RISC-V 64-bit
-            arch: riscv64
-            compiler: gcc-riscv64
+            name: Windows x64
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -71,474 +36,93 @@ jobs:
           repository: tidesdb/tidesdb
           path: tidesdb
 
-      - name: Install dependencies (Linux x64)
-        if: runner.os == 'Linux' && matrix.arch == 'x64'
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt update
           sudo apt install -y libzstd-dev liblz4-dev libsnappy-dev build-essential cmake pkg-config
 
-      - name: Install dependencies (Linux x86)
-        if: runner.os == 'Linux' && matrix.arch == 'x86'
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt update
-          sudo apt install -y gcc-multilib g++-multilib libc6-dev-i386 \
-            libzstd-dev:i386 liblz4-dev:i386 libsnappy-dev:i386 build-essential cmake pkg-config
-
-      - name: Install dependencies (Linux PowerPC)
-        if: runner.os == 'Linux' && matrix.arch == 'ppc'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            crossbuild-essential-powerpc \
-            gcc-powerpc-linux-gnu \
-            g++-powerpc-linux-gnu \
-            qemu-user-static \
-            build-essential cmake pkg-config \
-            git wget
-
-          mkdir -p /tmp/ppc-deps
-          cd /tmp/ppc-deps
-
-          wget https://github.com/lz4/lz4/archive/refs/tags/v1.9.4.tar.gz -O lz4.tar.gz
-          tar xzf lz4.tar.gz
-          cd lz4-1.9.4
-          make CC=powerpc-linux-gnu-gcc lib
-          sudo make CC=powerpc-linux-gnu-gcc PREFIX=/usr/powerpc-linux-gnu install
-          cd ..
-
-          wget https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz
-          tar xzf zstd-1.5.5.tar.gz
-          cd zstd-1.5.5
-          make CC=powerpc-linux-gnu-gcc lib
-          sudo make CC=powerpc-linux-gnu-gcc PREFIX=/usr/powerpc-linux-gnu install
-          cd ..
-
-          wget https://github.com/google/snappy/archive/refs/tags/1.1.10.tar.gz -O snappy.tar.gz
-          tar xzf snappy.tar.gz
-          cd snappy-1.1.10
-          cmake -S . -B build \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=powerpc \
-            -DCMAKE_C_COMPILER=powerpc-linux-gnu-gcc \
-            -DCMAKE_CXX_COMPILER=powerpc-linux-gnu-g++ \
-            -DCMAKE_INSTALL_PREFIX=/usr/powerpc-linux-gnu \
-            -DSNAPPY_BUILD_TESTS=OFF \
-            -DSNAPPY_BUILD_BENCHMARKS=OFF
-          cmake --build build
-          sudo cmake --install build
-
-      - name: Install dependencies (Linux RISC-V 64-bit)
-        if: runner.os == 'Linux' && matrix.arch == 'riscv64'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            crossbuild-essential-riscv64 \
-            gcc-riscv64-linux-gnu \
-            g++-riscv64-linux-gnu \
-            qemu-user-static \
-            build-essential cmake pkg-config \
-            git wget
-
-          mkdir -p /tmp/riscv64-deps
-          cd /tmp/riscv64-deps
-
-          wget https://github.com/lz4/lz4/archive/refs/tags/v1.9.4.tar.gz -O lz4.tar.gz
-          tar xzf lz4.tar.gz
-          cd lz4-1.9.4
-          make CC=riscv64-linux-gnu-gcc lib
-          sudo make CC=riscv64-linux-gnu-gcc PREFIX=/usr/riscv64-linux-gnu install
-          cd ..
-
-          wget https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz
-          tar xzf zstd-1.5.5.tar.gz
-          cd zstd-1.5.5
-          make CC=riscv64-linux-gnu-gcc lib
-          sudo make CC=riscv64-linux-gnu-gcc PREFIX=/usr/riscv64-linux-gnu install
-          cd ..
-
-          wget https://github.com/google/snappy/archive/refs/tags/1.1.10.tar.gz -O snappy.tar.gz
-          tar xzf snappy.tar.gz
-          cd snappy-1.1.10
-          cmake -S . -B build \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc \
-            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++ \
-            -DCMAKE_INSTALL_PREFIX=/usr/riscv64-linux-gnu \
-            -DSNAPPY_BUILD_TESTS=OFF \
-            -DSNAPPY_BUILD_BENCHMARKS=OFF
-          cmake --build build
-          sudo cmake --install build
-
-      - name: Install dependencies (macOS PowerPC cross-compile)
-        if: runner.os == 'Linux' && matrix.arch == 'ppc-macos'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            crossbuild-essential-powerpc \
-            gcc-powerpc-linux-gnu \
-            g++-powerpc-linux-gnu \
-            qemu-user-static \
-            build-essential cmake pkg-config \
-            git wget
-
-          mkdir -p /tmp/ppc-deps
-          cd /tmp/ppc-deps
-
-          wget https://github.com/lz4/lz4/archive/refs/tags/v1.9.4.tar.gz -O lz4.tar.gz
-          tar xzf lz4.tar.gz
-          cd lz4-1.9.4
-          make CC=powerpc-linux-gnu-gcc lib
-          sudo make CC=powerpc-linux-gnu-gcc PREFIX=/usr/powerpc-linux-gnu install
-          cd ..
-
-          wget https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz
-          tar xzf zstd-1.5.5.tar.gz
-          cd zstd-1.5.5
-          make CC=powerpc-linux-gnu-gcc lib
-          sudo make CC=powerpc-linux-gnu-gcc PREFIX=/usr/powerpc-linux-gnu install
-          cd ..
-
-          wget https://github.com/google/snappy/archive/refs/tags/1.1.10.tar.gz -O snappy.tar.gz
-          tar xzf snappy.tar.gz
-          cd snappy-1.1.10
-          cmake -S . -B build \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=powerpc \
-            -DCMAKE_C_COMPILER=powerpc-linux-gnu-gcc \
-            -DCMAKE_CXX_COMPILER=powerpc-linux-gnu-g++ \
-            -DCMAKE_INSTALL_PREFIX=/usr/powerpc-linux-gnu \
-            -DSNAPPY_BUILD_TESTS=OFF \
-            -DSNAPPY_BUILD_BENCHMARKS=OFF
-          cmake --build build
-          sudo cmake --install build
-
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        shell: bash
         run: brew install zstd lz4 snappy
 
-      - name: Setup vcpkg binary cache (Windows)
+      - name: Setup MSYS2 (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $env:VCPKG_DEFAULT_BINARY_CACHE = "$env:GITHUB_WORKSPACE\vcpkg_cache"
-          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE
-          echo "VCPKG_DEFAULT_BINARY_CACHE=$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Cache vcpkg packages (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: msys2/setup-msys2@v2
         with:
-          path: vcpkg_cache
-          key: vcpkg-${{ matrix.compiler }}-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json', '**/CMakeLists.txt') }}
-          restore-keys: |
-            vcpkg-${{ matrix.compiler }}-${{ matrix.arch }}-
-            vcpkg-${{ matrix.compiler }}-
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-make
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-lz4
+            mingw-w64-x86_64-snappy
+            mingw-w64-x86_64-go
 
-      - name: Install dependencies (Windows MSVC x64)
-        if: matrix.compiler == 'msvc' && matrix.arch == 'x64'
-        shell: pwsh
-        run: |
-          cd $env:VCPKG_INSTALLATION_ROOT
-          git pull
-          .\vcpkg.exe install zstd:x64-windows snappy:x64-windows lz4:x64-windows pthreads:x64-windows
-
-      - name: Install dependencies (Windows MSVC x86)
-        if: matrix.compiler == 'msvc' && matrix.arch == 'x86'
-        shell: pwsh
-        run: |
-          cd $env:VCPKG_INSTALLATION_ROOT
-          git pull
-          .\vcpkg.exe install zstd:x86-windows snappy:x86-windows lz4:x86-windows pthreads:x86-windows
-
-      - name: Install and setup MinGW
-        if: matrix.compiler == 'mingw'
-        shell: pwsh
-        run: |
-          if ("${{ matrix.arch }}" -eq "x86") {
-              choco install mingw --version=8.1.0 --forcex86 -y
-              $mingwPath = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw32\bin"
-          } else {
-              choco install mingw --version=8.1.0 -y
-              $mingwPath = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin"
-          }
-          echo "$mingwPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          $env:PATH = "$mingwPath;$env:PATH"
-          gcc --version
-
-      - name: Configure CMake (Linux/macOS x64)
-        if: runner.os != 'Windows' && matrix.arch == 'x64'
-        shell: bash
+      - name: Configure and build TidesDB (Linux)
+        if: runner.os == 'Linux'
         run: |
           cd tidesdb
           cmake -S . -B build -DTIDESDB_BUILD_TESTS=OFF -DTIDESDB_WITH_SANITIZER=OFF
-
-      - name: Configure CMake (Linux x86)
-        if: runner.os == 'Linux' && matrix.arch == 'x86'
-        shell: bash
-        run: |
-          cd tidesdb
-          export PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig
-          cmake -S . -B build \
-            -DCMAKE_C_FLAGS="-m32" \
-            -DCMAKE_CXX_FLAGS="-m32" \
-            -DCMAKE_EXE_LINKER_FLAGS="-m32 -L/usr/lib/i386-linux-gnu" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-m32 -L/usr/lib/i386-linux-gnu" \
-            -DCMAKE_MODULE_LINKER_FLAGS="-m32 -L/usr/lib/i386-linux-gnu" \
-            -DTIDESDB_BUILD_TESTS=OFF \
-            -DTIDESDB_WITH_SANITIZER=OFF
-
-      - name: Configure CMake (Linux PowerPC)
-        if: runner.os == 'Linux' && matrix.arch == 'ppc'
-        shell: bash
-        run: |
-          cd tidesdb
-          export PKG_CONFIG_PATH=/usr/powerpc-linux-gnu/lib/pkgconfig
-          cmake -S . -B build \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=powerpc \
-            -DCMAKE_C_COMPILER=powerpc-linux-gnu-gcc \
-            -DCMAKE_CXX_COMPILER=powerpc-linux-gnu-g++ \
-            -DCMAKE_FIND_ROOT_PATH=/usr/powerpc-linux-gnu \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
-            -DCMAKE_EXE_LINKER_FLAGS="-L/usr/powerpc-linux-gnu/lib -L/usr/lib/powerpc-linux-gnu" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/powerpc-linux-gnu/lib -L/usr/lib/powerpc-linux-gnu" \
-            -DCMAKE_MODULE_LINKER_FLAGS="-L/usr/powerpc-linux-gnu/lib -L/usr/lib/powerpc-linux-gnu" \
-            -DTIDESDB_BUILD_TESTS=OFF \
-            -DTIDESDB_WITH_SANITIZER=OFF
-
-      - name: Configure CMake (Linux RISC-V 64-bit)
-        if: runner.os == 'Linux' && matrix.arch == 'riscv64'
-        shell: bash
-        run: |
-          cd tidesdb
-          export PKG_CONFIG_PATH=/usr/riscv64-linux-gnu/lib/pkgconfig
-          cmake -S . -B build \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc \
-            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++ \
-            -DCMAKE_FIND_ROOT_PATH=/usr/riscv64-linux-gnu \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
-            -DCMAKE_EXE_LINKER_FLAGS="-L/usr/riscv64-linux-gnu/lib -L/usr/lib/riscv64-linux-gnu" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/riscv64-linux-gnu/lib -L/usr/lib/riscv64-linux-gnu" \
-            -DCMAKE_MODULE_LINKER_FLAGS="-L/usr/riscv64-linux-gnu/lib -L/usr/lib/riscv64-linux-gnu" \
-            -DTIDESDB_BUILD_TESTS=OFF \
-            -DTIDESDB_WITH_SANITIZER=OFF
-
-      - name: Configure CMake (macOS PowerPC cross-compile)
-        if: runner.os == 'Linux' && matrix.arch == 'ppc-macos'
-        shell: bash
-        run: |
-          cd tidesdb
-          export PKG_CONFIG_PATH=/usr/powerpc-linux-gnu/lib/pkgconfig
-          cmake -S . -B build \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=powerpc \
-            -DCMAKE_C_COMPILER=powerpc-linux-gnu-gcc \
-            -DCMAKE_CXX_COMPILER=powerpc-linux-gnu-g++ \
-            -DCMAKE_FIND_ROOT_PATH=/usr/powerpc-linux-gnu \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
-            -DCMAKE_EXE_LINKER_FLAGS="-L/usr/powerpc-linux-gnu/lib -L/usr/lib/powerpc-linux-gnu" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/powerpc-linux-gnu/lib -L/usr/lib/powerpc-linux-gnu" \
-            -DCMAKE_MODULE_LINKER_FLAGS="-L/usr/powerpc-linux-gnu/lib -L/usr/lib/powerpc-linux-gnu" \
-            -DUSE_HOMEBREW=OFF \
-            -DTIDESDB_BUILD_TESTS=OFF \
-            -DTIDESDB_WITH_SANITIZER=OFF
-
-      - name: Configure CMake (macOS x86)
-        if: runner.os == 'macOS' && matrix.arch == 'x86'
-        shell: bash
-        run: |
-          cd tidesdb
-          cmake -S . -B build \
-            -DCMAKE_C_FLAGS="-m32" \
-            -DCMAKE_CXX_FLAGS="-m32" \
-            -DCMAKE_EXE_LINKER_FLAGS="-m32" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-m32" \
-            -DCMAKE_MODULE_LINKER_FLAGS="-m32" \
-            -DTIDESDB_BUILD_TESTS=OFF \
-            -DTIDESDB_WITH_SANITIZER=OFF
-
-      - name: Configure CMake (Windows MSVC x64)
-        if: matrix.compiler == 'msvc' && matrix.arch == 'x64'
-        shell: pwsh
-        run: |
-          cd tidesdb
-          cmake -S . -B build -A x64 -DTIDESDB_BUILD_TESTS=OFF -DTIDESDB_WITH_SANITIZER=OFF -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-
-      - name: Configure CMake (Windows MSVC x86)
-        if: matrix.compiler == 'msvc' && matrix.arch == 'x86'
-        shell: pwsh
-        run: |
-          cd tidesdb
-          cmake -S . -B build -A Win32 -DTIDESDB_BUILD_TESTS=OFF -DTIDESDB_WITH_SANITIZER=OFF -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-
-      - name: Configure CMake (Windows MinGW)
-        if: matrix.compiler == 'mingw'
-        shell: pwsh
-        run: |
-          cd tidesdb
-          if ("${{ matrix.arch }}" -eq "x86") {
-              cd $env:VCPKG_INSTALLATION_ROOT
-              .\vcpkg.exe install zstd:x86-windows snappy:x86-windows lz4:x86-windows pthreads:x86-windows
-
-              cd $env:GITHUB_WORKSPACE/tidesdb
-
-              Write-Host "Configuring for 32-bit MinGW build..."
-              cmake -S . -B build -G "MinGW Makefiles" `
-                -DCMAKE_C_FLAGS="-m32" `
-                -DCMAKE_SYSTEM_PROCESSOR=x86 `
-                -DTIDESDB_BUILD_TESTS=OFF `
-                -DTIDESDB_WITH_SANITIZER=OFF `
-                -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-                -DVCPKG_TARGET_TRIPLET=x86-windows
-          } else {
-
-              cd $env:VCPKG_INSTALLATION_ROOT
-              .\vcpkg.exe install zstd:x64-windows snappy:x64-windows lz4:x64-windows pthreads:x64-windows
-
-              cd $env:GITHUB_WORKSPACE/tidesdb
-
-              Write-Host "Configuring for 64-bit MinGW build..."
-              cmake -S . -B build -G "MinGW Makefiles" `
-                -DTIDESDB_BUILD_TESTS=OFF `
-                -DTIDESDB_WITH_SANITIZER=OFF `
-                -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-                -DVCPKG_TARGET_TRIPLET=x64-windows
-          }
-
-      - name: Build TidesDB
-        shell: bash
-        run: |
-          cd tidesdb
           cmake --build build --config Release
+          sudo cmake --install build
+          sudo ldconfig
 
-      - name: Install TidesDB (Linux/macOS)
-        if: runner.os != 'Windows'
-        shell: bash
+      - name: Configure and build TidesDB (macOS)
+        if: runner.os == 'macOS'
         run: |
           cd tidesdb
+          export HOMEBREW_PREFIX=$(brew --prefix)
+          cmake -S . -B build \
+            -DTIDESDB_BUILD_TESTS=OFF \
+            -DTIDESDB_WITH_SANITIZER=OFF \
+            -DCMAKE_PREFIX_PATH="${HOMEBREW_PREFIX}"
+          cmake --build build --config Release
           sudo cmake --install build
 
-      - name: Update library cache (Linux)
-        if: runner.os == 'Linux'
-        run: sudo ldconfig
-
-      - name: Install TidesDB (Windows MSVC)
-        if: runner.os == 'Windows' && matrix.compiler == 'msvc'
-        shell: pwsh
+      - name: Configure and build TidesDB (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: |
           cd tidesdb
-          cmake --install build --prefix "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.arch }}-windows"
-
-      - name: Install TidesDB (Windows MinGW)
-        if: runner.os == 'Windows' && matrix.compiler == 'mingw'
-        shell: bash
-        run: |
-          cd tidesdb
-          cmake --install build --prefix /c/mingw-install
+          cmake -G "MinGW Makefiles" \
+            -DCMAKE_MAKE_PROGRAM=mingw32-make \
+            -DCMAKE_PREFIX_PATH=/mingw64 \
+            -DTIDESDB_WITH_SANITIZER=OFF \
+            -DTIDESDB_BUILD_TESTS=OFF \
+            -S . -B build
+          cmake --build build --config Release
+          cmake --install build --prefix /mingw64
 
       - name: Install Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
 
-      - name: Run Go tests (Linux x64)
-        if: runner.os == 'Linux' && matrix.arch == 'x64'
+      - name: Run Go tests (Linux)
+        if: runner.os == 'Linux'
         run: |
           cd tidesdb-go
           go mod tidy
           go test -v ./...
 
-      - name: Run Go tests (Linux x86)
-        if: runner.os == 'Linux' && matrix.arch == 'x86'
-        run: |
-          cd tidesdb-go
-          export CGO_CFLAGS="-m32"
-          export CGO_LDFLAGS="-m32 -L/usr/lib/i386-linux-gnu"
-          GOARCH=386 go mod tidy
-          GOARCH=386 go test -v ./...
-
-      - name: Run Go tests (Linux PowerPC)
-        if: runner.os == 'Linux' && matrix.arch == 'ppc'
-        run: |
-          cd tidesdb-go
-          export CGO_ENABLED=1
-          export CC=powerpc-linux-gnu-gcc
-          export CXX=powerpc-linux-gnu-g++
-          export CGO_CFLAGS="-I/usr/powerpc-linux-gnu/include"
-          export CGO_LDFLAGS="-L/usr/powerpc-linux-gnu/lib -L/usr/lib/powerpc-linux-gnu"
-          GOOS=linux GOARCH=ppc go mod tidy
-          GOOS=linux GOARCH=ppc go build ./... || echo "**PowerPC Go build attempted"
-
-      - name: Run Go tests (Linux RISC-V 64-bit)
-        if: runner.os == 'Linux' && matrix.arch == 'riscv64'
-        run: |
-          cd tidesdb-go
-          export CGO_ENABLED=1
-          export CC=riscv64-linux-gnu-gcc
-          export CXX=riscv64-linux-gnu-g++
-          export CGO_CFLAGS="-I/usr/riscv64-linux-gnu/include"
-          export CGO_LDFLAGS="-L/usr/riscv64-linux-gnu/lib -L/usr/lib/riscv64-linux-gnu"
-          GOOS=linux GOARCH=riscv64 go mod tidy
-          GOOS=linux GOARCH=riscv64 go build ./... || echo "**RISC-V 64-bit Go build attempted"
-
-      - name: Run Go tests (macOS PowerPC cross-compile)
-        if: runner.os == 'Linux' && matrix.arch == 'ppc-macos'
-        run: |
-          cd tidesdb-go
-          export CGO_ENABLED=1
-          export CC=powerpc-linux-gnu-gcc
-          export CXX=powerpc-linux-gnu-g++
-          export CGO_CFLAGS="-I/usr/powerpc-linux-gnu/include"
-          export CGO_LDFLAGS="-L/usr/powerpc-linux-gnu/lib -L/usr/lib/powerpc-linux-gnu"
-          GOOS=linux GOARCH=ppc go mod tidy
-          GOOS=linux GOARCH=ppc go build ./... || echo "**macOS PowerPC Go build attempted"
-
-      - name: Run Go tests (macOS x64)
-        if: runner.os == 'macOS' && matrix.arch == 'x64'
+      - name: Run Go tests (macOS)
+        if: runner.os == 'macOS'
         run: |
           cd tidesdb-go
           go mod tidy
           go test -v ./...
 
-      - name: Run Go tests (macOS x86)
-        if: runner.os == 'macOS' && matrix.arch == 'x86'
+      - name: Run Go tests (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: |
-          cd tidesdb-go
-          export CGO_CFLAGS="-m32"
-          export CGO_LDFLAGS="-m32"
-          GOARCH=386 go mod tidy
-          GOARCH=386 go test -v ./... || echo "**macOS x86 Go tests attempted"
-
-      - name: Run Go tests (Windows MSVC)
-        if: runner.os == 'Windows' && matrix.compiler == 'msvc'
-        shell: pwsh
-        run: |
-          $triplet = "${{ matrix.arch }}-windows"
-          $env:CGO_CFLAGS = "-I$env:VCPKG_INSTALLATION_ROOT/installed/$triplet/include"
-          $env:CGO_LDFLAGS = "-L$env:VCPKG_INSTALLATION_ROOT/installed/$triplet/lib -ltidesdb -lzstd -llz4 -lsnappy"
-          $env:PATH = "$env:VCPKG_INSTALLATION_ROOT/installed/$triplet/bin;$env:PATH"
-          cd tidesdb-go
-          go mod tidy
-          go test -v ./...
-
-      - name: Run Go tests (Windows MinGW)
-        if: runner.os == 'Windows' && matrix.compiler == 'mingw'
-        shell: bash
-        run: |
-          export CGO_CFLAGS="-I/c/mingw-install/include"
-          export CGO_LDFLAGS="-L/c/mingw-install/lib -ltidesdb -lzstd -llz4 -lsnappy -lws2_32 -lbcrypt"
-          export PATH="/c/mingw-install/bin:$PATH"
+          export PATH="/mingw64/bin:$PATH"
+          export CGO_ENABLED=1
+          export CGO_CFLAGS="-I/mingw64/include"
+          export CGO_LDFLAGS="-L/mingw64/lib -ltidesdb -lzstd -llz4 -lsnappy -lws2_32 -lbcrypt"
           cd tidesdb-go
           go mod tidy
           go test -v ./...
