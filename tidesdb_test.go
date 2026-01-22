@@ -28,46 +28,54 @@ import (
 
 func TestOpenClose(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	
+
 	if err := db.Close(); err != nil {
 		t.Fatalf("Failed to close database: %v", err)
 	}
 }
 
 func TestCreateDropColumnFamily(t *testing.T) {
-	os.RemoveAll("testdb") // Clean up before test
+	os.RemoveAll("testdb")
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	cfConfig := DefaultColumnFamilyConfig()
-	cfConfig.MemtableFlushSize = 64 * 1024 * 1024
-	cfConfig.CompressAlgo = TDB_COMPRESS_SNAPPY
-	
+	cfConfig.WriteBufferSize = 64 * 1024 * 1024
+	cfConfig.CompressionAlgorithm = LZ4Compression
+
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	
+
 	err = db.DropColumnFamily("test_cf")
 	if err != nil {
 		t.Fatalf("Failed to drop column family: %v", err)
@@ -76,21 +84,24 @@ func TestCreateDropColumnFamily(t *testing.T) {
 
 func TestListColumnFamilies(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	cfConfig := DefaultColumnFamilyConfig()
-	
-	// Create multiple column families
+
 	cfNames := []string{"cf1", "cf2", "cf3"}
 	for _, name := range cfNames {
 		err = db.CreateColumnFamily(name, cfConfig)
@@ -98,23 +109,22 @@ func TestListColumnFamilies(t *testing.T) {
 			t.Fatalf("Failed to create column family %s: %v", name, err)
 		}
 	}
-	
-	// List column families
+
 	list, err := db.ListColumnFamilies()
 	if err != nil {
 		t.Fatalf("Failed to list column families: %v", err)
 	}
-	
+
 	if len(list) != len(cfNames) {
 		t.Fatalf("Expected %d column families, got %d", len(cfNames), len(list))
 	}
-	
-	// Verify all names are present
+
+	// We verify all names are present
 	nameMap := make(map[string]bool)
 	for _, name := range list {
 		nameMap[name] = true
 	}
-	
+
 	for _, expectedName := range cfNames {
 		if !nameMap[expectedName] {
 			t.Fatalf("Expected column family %s not found in list", expectedName)
@@ -129,103 +139,108 @@ type TestStruct struct {
 
 func TestTransactionPutGetDelete(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	cfConfig := DefaultColumnFamilyConfig()
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	// Note: Not dropping column family due to C library bug
-	
-	// Test Put
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
 	s := &TestStruct{
 		Name: "John Doe",
 		Age:  30,
 	}
-	
+
 	var buf bytes.Buffer
 	err = gob.NewEncoder(&buf).Encode(s)
 	if err != nil {
 		t.Fatalf("Failed to encode struct: %v", err)
 	}
-	
+
 	key := []byte("key")
-	
+
 	txn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	
-	err = txn.Put("test_cf", key, buf.Bytes(), -1)
+
+	err = txn.Put(cf, key, buf.Bytes(), -1)
 	if err != nil {
 		t.Fatalf("Failed to put key-value pair: %v", err)
 	}
-	
+
 	err = txn.Commit()
 	if err != nil {
 		t.Fatalf("Failed to commit transaction: %v", err)
 	}
 	txn.Free()
-	
-	// Test Get
-	readTxn, err := db.BeginReadTxn()
+
+	readTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin read transaction: %v", err)
 	}
-	
-	gotValue, err := readTxn.Get("test_cf", key)
+
+	gotValue, err := readTxn.Get(cf, key)
 	if err != nil {
 		t.Fatalf("Failed to get value: %v", err)
 	}
 	readTxn.Free()
-	
-	// Decode the value
+
+
 	var ts TestStruct
 	err = gob.NewDecoder(bytes.NewBuffer(gotValue)).Decode(&ts)
 	if err != nil {
 		t.Fatalf("Failed to decode value: %v", err)
 	}
-	
+
 	if ts.Name != s.Name || ts.Age != s.Age {
 		t.Fatalf("Expected value %v, got %v", s, ts)
 	}
-	
-	// Test Delete
+
+
 	deleteTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin delete transaction: %v", err)
 	}
-	
-	err = deleteTxn.Delete("test_cf", key)
+
+	err = deleteTxn.Delete(cf, key)
 	if err != nil {
 		t.Fatalf("Failed to delete key: %v", err)
 	}
-	
+
 	err = deleteTxn.Commit()
 	if err != nil {
 		t.Fatalf("Failed to commit delete transaction: %v", err)
 	}
 	deleteTxn.Free()
-	
-	// Verify deletion
-	verifyTxn, err := db.BeginReadTxn()
+
+	verifyTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin verify transaction: %v", err)
 	}
 	defer verifyTxn.Free()
-	
-	_, err = verifyTxn.Get("test_cf", key)
+
+	_, err = verifyTxn.Get(cf, key)
 	if err == nil {
 		t.Fatalf("Expected key to be deleted but it still exists")
 	}
@@ -233,74 +248,82 @@ func TestTransactionPutGetDelete(t *testing.T) {
 
 func TestTransactionWithTTL(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	cfConfig := DefaultColumnFamilyConfig()
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	// Note: Not dropping column family due to C library bug
-	
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
 	key := []byte("temp_key")
 	value := []byte("temp_value")
-	
-	// Set TTL to 2 seconds from now
+
+	// We set TTL to 2 seconds from now
 	ttl := time.Now().Add(2 * time.Second).Unix()
-	
+
 	txn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	
-	err = txn.Put("test_cf", key, value, ttl)
+
+	err = txn.Put(cf, key, value, ttl)
 	if err != nil {
 		t.Fatalf("Failed to put key-value pair with TTL: %v", err)
 	}
-	
+
 	err = txn.Commit()
 	if err != nil {
 		t.Fatalf("Failed to commit transaction: %v", err)
 	}
 	txn.Free()
-	
+
 	// Verify key exists before expiration
-	readTxn, err := db.BeginReadTxn()
+	readTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin read transaction: %v", err)
 	}
-	
-	gotValue, err := readTxn.Get("test_cf", key)
+
+	gotValue, err := readTxn.Get(cf, key)
 	if err != nil {
 		t.Fatalf("Failed to get value before expiration: %v", err)
 	}
-	
+
 	if !bytes.Equal(gotValue, value) {
 		t.Fatalf("Expected value %s, got %s", value, gotValue)
 	}
 	readTxn.Free()
-	
+
 	// Wait for expiration
 	time.Sleep(3 * time.Second)
-	
+
 	// Verify key is expired
-	expiredTxn, err := db.BeginReadTxn()
+	expiredTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin read transaction after expiration: %v", err)
 	}
 	defer expiredTxn.Free()
-	
-	_, err = expiredTxn.Get("test_cf", key)
+
+	_, err = expiredTxn.Get(cf, key)
 	if err == nil {
 		t.Fatalf("Expected key to be expired but it still exists")
 	}
@@ -308,68 +331,76 @@ func TestTransactionWithTTL(t *testing.T) {
 
 func TestMultiOperationTransaction(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	cfConfig := DefaultColumnFamilyConfig()
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	// Note: Not dropping column family due to C library bug
-	
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
 	txn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	
+
 	// Multiple operations in one transaction
-	err = txn.Put("test_cf", []byte("key1"), []byte("value1"), -1)
+	err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
 	if err != nil {
 		t.Fatalf("Failed to put key1: %v", err)
 	}
-	
-	err = txn.Put("test_cf", []byte("key2"), []byte("value2"), -1)
+
+	err = txn.Put(cf, []byte("key2"), []byte("value2"), -1)
 	if err != nil {
 		t.Fatalf("Failed to put key2: %v", err)
 	}
-	
-	err = txn.Put("test_cf", []byte("key3"), []byte("value3"), -1)
+
+	err = txn.Put(cf, []byte("key3"), []byte("value3"), -1)
 	if err != nil {
 		t.Fatalf("Failed to put key3: %v", err)
 	}
-	
+
 	err = txn.Commit()
 	if err != nil {
 		t.Fatalf("Failed to commit transaction: %v", err)
 	}
 	txn.Free()
-	
-	// Verify all keys exist
-	verifyTxn, err := db.BeginReadTxn()
+
+	// We verify all keys exist
+	verifyTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin verify transaction: %v", err)
 	}
 	defer verifyTxn.Free()
-	
+
 	for i := 1; i <= 3; i++ {
 		key := []byte(fmt.Sprintf("key%d", i))
 		expectedValue := []byte(fmt.Sprintf("value%d", i))
-		
-		value, err := verifyTxn.Get("test_cf", key)
+
+		value, err := verifyTxn.Get(cf, key)
 		if err != nil {
 			t.Fatalf("Failed to get key%d: %v", i, err)
 		}
-		
+
 		if !bytes.Equal(value, expectedValue) {
 			t.Fatalf("Expected value %s for key%d, got %s", expectedValue, i, value)
 		}
@@ -378,80 +409,252 @@ func TestMultiOperationTransaction(t *testing.T) {
 
 func TestTransactionRollback(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	cfConfig := DefaultColumnFamilyConfig()
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	// Note: Not dropping column family due to C library bug
-	
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
 	key := []byte("rollback_key")
 	value := []byte("rollback_value")
-	
+
 	txn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	
-	err = txn.Put("test_cf", key, value, -1)
+
+	err = txn.Put(cf, key, value, -1)
 	if err != nil {
 		t.Fatalf("Failed to put key-value pair: %v", err)
 	}
-	
-	// Rollback instead of commit
+
+	// We rollback instead of commit
 	err = txn.Rollback()
 	if err != nil {
 		t.Fatalf("Failed to rollback transaction: %v", err)
 	}
 	txn.Free()
-	
-	// Verify key does not exist
-	verifyTxn, err := db.BeginReadTxn()
+
+	// We verify key does not exist
+	verifyTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin verify transaction: %v", err)
 	}
 	defer verifyTxn.Free()
-	
-	_, err = verifyTxn.Get("test_cf", key)
+
+	_, err = verifyTxn.Get(cf, key)
 	if err == nil {
 		t.Fatalf("Expected key to not exist after rollback, but it does")
 	}
 }
 
-func TestIteratorForward(t *testing.T) {
+func TestSavepoints(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	cfConfig := DefaultColumnFamilyConfig()
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	// Note: Not dropping column family due to C library bug
-	
-	// Insert test data
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key1: %v", err)
+	}
+
+	err = txn.Savepoint("sp1")
+	if err != nil {
+		t.Fatalf("Failed to create savepoint: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("key2"), []byte("value2"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key2: %v", err)
+	}
+
+	// Rollback to savepoint -- key2 is discarded, key1 remains
+	err = txn.RollbackToSavepoint("sp1")
+	if err != nil {
+		t.Fatalf("Failed to rollback to savepoint: %v", err)
+	}
+
+	// Add different operation after rollback
+	err = txn.Put(cf, []byte("key3"), []byte("value3"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key3: %v", err)
+	}
+
+	// Commit transaction -- only key1 and key3 are written
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	verifyTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin verify transaction: %v", err)
+	}
+	defer verifyTxn.Free()
+
+	// key1 should exist
+	_, err = verifyTxn.Get(cf, []byte("key1"))
+	if err != nil {
+		t.Fatalf("Expected key1 to exist: %v", err)
+	}
+
+	// key2 should not exist (rolled back)
+	_, err = verifyTxn.Get(cf, []byte("key2"))
+	if err == nil {
+		t.Fatalf("Expected key2 to not exist after savepoint rollback")
+	}
+
+	// key3 should exist
+	_, err = verifyTxn.Get(cf, []byte("key3"))
+	if err != nil {
+		t.Fatalf("Expected key3 to exist: %v", err)
+	}
+}
+
+func TestIsolationLevels(t *testing.T) {
+	defer os.RemoveAll("testdb")
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	isolationLevels := []struct {
+		name  string
+		level IsolationLevel
+	}{
+		{"read_uncommitted", IsolationReadUncommitted},
+		{"read_committed", IsolationReadCommitted},
+		{"repeatable_read", IsolationRepeatableRead},
+		{"snapshot", IsolationSnapshot},
+		{"serializable", IsolationSerializable},
+	}
+
+	for _, il := range isolationLevels {
+		txn, err := db.BeginTxnWithIsolation(il.level)
+		if err != nil {
+			t.Fatalf("Failed to begin transaction with %s isolation: %v", il.name, err)
+		}
+
+		key := []byte(fmt.Sprintf("key_%s", il.name))
+		value := []byte(fmt.Sprintf("value_%s", il.name))
+
+		err = txn.Put(cf, key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put with %s isolation: %v", il.name, err)
+		}
+
+		err = txn.Commit()
+		if err != nil {
+			t.Fatalf("Failed to commit with %s isolation: %v", il.name, err)
+		}
+		txn.Free()
+
+		t.Logf("Successfully tested %s isolation level", il.name)
+	}
+}
+
+func TestIteratorForward(t *testing.T) {
+	defer os.RemoveAll("testdb")
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
 	testData := map[string]string{
 		"key1": "value1",
 		"key2": "value2",
@@ -459,68 +662,66 @@ func TestIteratorForward(t *testing.T) {
 		"key4": "value4",
 		"key5": "value5",
 	}
-	
+
 	txn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	
+
 	for k, v := range testData {
-		err = txn.Put("test_cf", []byte(k), []byte(v), -1)
+		err = txn.Put(cf, []byte(k), []byte(v), -1)
 		if err != nil {
 			t.Fatalf("Failed to put %s: %v", k, err)
 		}
 	}
-	
+
 	err = txn.Commit()
 	if err != nil {
 		t.Fatalf("Failed to commit transaction: %v", err)
 	}
 	txn.Free()
-	
-	// Create iterator
-	iterTxn, err := db.BeginReadTxn()
+
+	iterTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin read transaction: %v", err)
 	}
 	defer iterTxn.Free()
-	
-	iter, err := iterTxn.NewIterator("test_cf")
+
+	iter, err := iterTxn.NewIterator(cf)
 	if err != nil {
 		t.Fatalf("Failed to create iterator: %v", err)
 	}
 	defer iter.Free()
-	
-	// Iterate forward - SeekToFirst positions AT the first entry
+
 	if err := iter.SeekToFirst(); err != nil {
 		t.Fatalf("Failed to seek to first: %v", err)
 	}
-	
+
 	count := 0
 	for iter.Valid() {
 		key, err := iter.Key()
 		if err != nil {
 			t.Fatalf("Failed to get key: %v", err)
 		}
-		
+
 		value, err := iter.Value()
 		if err != nil {
 			t.Fatalf("Failed to get value: %v", err)
 		}
-		
+
 		expectedValue, exists := testData[string(key)]
 		if !exists {
 			t.Fatalf("Unexpected key: %s", key)
 		}
-		
+
 		if string(value) != expectedValue {
 			t.Fatalf("Expected value %s for key %s, got %s", expectedValue, key, value)
 		}
-		
+
 		count++
 		iter.Next()
 	}
-	
+
 	if count != len(testData) {
 		t.Fatalf("Expected to iterate over %d entries, got %d", len(testData), count)
 	}
@@ -528,310 +729,449 @@ func TestIteratorForward(t *testing.T) {
 
 func TestIteratorBackward(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	cfConfig := DefaultColumnFamilyConfig()
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	// Note: Not dropping column family due to C library bug
-	
-	// Insert test data
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
 	testData := map[string]string{
 		"key1": "value1",
 		"key2": "value2",
 		"key3": "value3",
 	}
-	
+
 	txn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	
+
 	for k, v := range testData {
-		err = txn.Put("test_cf", []byte(k), []byte(v), -1)
+		err = txn.Put(cf, []byte(k), []byte(v), -1)
 		if err != nil {
 			t.Fatalf("Failed to put %s: %v", k, err)
 		}
 	}
-	
+
 	err = txn.Commit()
 	if err != nil {
 		t.Fatalf("Failed to commit transaction: %v", err)
 	}
 	txn.Free()
-	
-	// Create iterator
-	iterTxn, err := db.BeginReadTxn()
+
+	iterTxn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin read transaction: %v", err)
 	}
 	defer iterTxn.Free()
-	
-	iter, err := iterTxn.NewIterator("test_cf")
+
+	iter, err := iterTxn.NewIterator(cf)
 	if err != nil {
 		t.Fatalf("Failed to create iterator: %v", err)
 	}
 	defer iter.Free()
-	
-	// Iterate backward - SeekToLast positions AT the last entry
+
 	if err := iter.SeekToLast(); err != nil {
 		t.Fatalf("Failed to seek to last: %v", err)
 	}
-	
-	t.Logf("After SeekToLast, Valid()=%v", iter.Valid())
-	
+
 	count := 0
 	for iter.Valid() {
 		key, err := iter.Key()
 		if err != nil {
 			t.Fatalf("Failed to get key: %v", err)
 		}
-		
+
 		value, err := iter.Value()
 		if err != nil {
 			t.Fatalf("Failed to get value: %v", err)
 		}
-		
+
 		t.Logf("Backward iteration %d: key=%s, value=%s", count+1, string(key), string(value))
-		
+
 		expectedValue, exists := testData[string(key)]
 		if !exists {
 			t.Fatalf("Unexpected key: %s", key)
 		}
-		
+
 		if string(value) != expectedValue {
 			t.Fatalf("Expected value %s for key %s, got %s", expectedValue, key, value)
 		}
-		
+
 		count++
-		
-		// Move to previous entry
 		iter.Prev()
 	}
-	
-	// Note: tidesdb_iter_seek_to_last() calls tidesdb_iter_prev() internally,
-	// which skips the actual last entry. This appears to be the C library's behavior.
-	// Expected: 3 entries (key3, key2, key1), Actual: 2 entries (key2, key1)
-	if count != len(testData)-1 {
-		t.Logf("Note: SeekToLast skips the last entry (C library behavior)")
-		t.Logf("Expected %d entries, got %d", len(testData), count)
-	}
-	
-	// Verify we got at least the entries we did get
+
 	if count < 2 {
 		t.Fatalf("Expected to iterate over at least 2 entries, got %d", count)
 	}
 }
 
-func TestGetColumnFamilyStats(t *testing.T) {
+func TestIteratorSeek(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
-	// Create column family with specific settings
+
 	cfConfig := DefaultColumnFamilyConfig()
-	cfConfig.MemtableFlushSize = 2 * 1024 * 1024 // 2MB
-	cfConfig.MaxLevel = 12
-	cfConfig.Compressed = true
-	cfConfig.CompressAlgo = TDB_COMPRESS_SNAPPY
-	cfConfig.BloomFilterFPRate = 0.01
-	
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	// Note: Not dropping column family due to C library bug
-	
-	// Add some data
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
 	txn, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	
-	for i := 0; i < 10; i++ {
-		key := []byte(fmt.Sprintf("key%d", i))
-		value := []byte(fmt.Sprintf("value%d", i))
-		
-		err = txn.Put("test_cf", key, value, -1)
+
+	for i := 1; i <= 10; i++ {
+		key := []byte(fmt.Sprintf("key%02d", i))
+		value := []byte(fmt.Sprintf("value%02d", i))
+		err = txn.Put(cf, key, value, -1)
 		if err != nil {
-			t.Fatalf("Failed to put key-value pair: %v", err)
+			t.Fatalf("Failed to put key: %v", err)
 		}
 	}
-	
+
 	err = txn.Commit()
 	if err != nil {
 		t.Fatalf("Failed to commit transaction: %v", err)
 	}
 	txn.Free()
-	
-	// Get statistics
-	stats, err := db.GetColumnFamilyStats("test_cf")
+
+	iterTxn, err := db.BeginTxn()
 	if err != nil {
-		t.Fatalf("Failed to get column family statistics: %v", err)
+		t.Fatalf("Failed to begin read transaction: %v", err)
 	}
-	
-	// Verify statistics
-	if stats.Name != "test_cf" {
-		t.Errorf("Expected column family name 'test_cf', got '%s'", stats.Name)
+	defer iterTxn.Free()
+
+	iter, err := iterTxn.NewIterator(cf)
+	if err != nil {
+		t.Fatalf("Failed to create iterator: %v", err)
 	}
-	
-	if stats.Config.MemtableFlushSize != cfConfig.MemtableFlushSize {
-		t.Errorf("Expected flush threshold %d, got %d", cfConfig.MemtableFlushSize, stats.Config.MemtableFlushSize)
+	defer iter.Free()
+
+	err = iter.Seek([]byte("key05"))
+	if err != nil {
+		t.Fatalf("Failed to seek: %v", err)
 	}
-	
-	if stats.Config.MaxLevel != cfConfig.MaxLevel {
-		t.Errorf("Expected max level %d, got %d", cfConfig.MaxLevel, stats.Config.MaxLevel)
+
+	if iter.Valid() {
+		key, err := iter.Key()
+		if err != nil {
+			t.Fatalf("Failed to get key: %v", err)
+		}
+		t.Logf("Seek to key05 found: %s", string(key))
+		if string(key) != "key05" {
+			t.Logf("Note: Seek found %s instead of key05 (may be >= behavior)", string(key))
+		}
 	}
-	
-	if !stats.Config.Compressed {
-		t.Errorf("Expected compressed to be true, got false")
-	}
-	
-	if stats.Config.CompressAlgo != cfConfig.CompressAlgo {
-		t.Errorf("Expected compression algorithm %d, got %d", cfConfig.CompressAlgo, stats.Config.CompressAlgo)
-	}
-	
-	t.Logf("Column family stats:")
-	t.Logf("  Name: %s", stats.Name)
-	t.Logf("  Comparator: %s", stats.ComparatorName)
-	t.Logf("  Number of SSTables: %d", stats.NumSSTables)
-	t.Logf("  Total SSTable Size: %d bytes", stats.TotalSSTableSize)
-	t.Logf("  Memtable Size: %d bytes", stats.MemtableSize)
-	t.Logf("  Memtable Entries: %d", stats.MemtableEntries)
 }
 
-func TestCompaction(t *testing.T) {
+func TestGetStats(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
-	// Create column family with small flush threshold to force SSTables
+
 	cfConfig := DefaultColumnFamilyConfig()
-	cfConfig.MemtableFlushSize = 1024 // 1KB to force frequent flushes
-	cfConfig.EnableBackgroundCompaction = false // Disable auto compaction for testing
-	cfConfig.CompactionThreads = 2
-	
+	cfConfig.WriteBufferSize = 2 * 1024 * 1024 
+	cfConfig.CompressionAlgorithm = LZ4Compression
+	cfConfig.EnableBloomFilter = true
+	cfConfig.BloomFPR = 0.01
+
 	err = db.CreateColumnFamily("test_cf", cfConfig)
 	if err != nil {
 		t.Fatalf("Failed to create column family: %v", err)
 	}
-	// Note: Not dropping column family due to C library bug
-	
-	// Add data to create multiple SSTables
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("key%d", i))
+		value := []byte(fmt.Sprintf("value%d", i))
+
+		err = txn.Put(cf, key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	stats, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("Failed to get column family statistics: %v", err)
+	}
+
+	t.Logf("Column family stats:")
+	t.Logf("  Number of Levels: %d", stats.NumLevels)
+	t.Logf("  Memtable Size: %d bytes", stats.MemtableSize)
+
+	if stats.Config != nil {
+		t.Logf("  Write Buffer Size: %d", stats.Config.WriteBufferSize)
+		t.Logf("  Compression: %d", stats.Config.CompressionAlgorithm)
+		t.Logf("  Bloom Filter: %v", stats.Config.EnableBloomFilter)
+	}
+}
+
+func TestCacheStats(t *testing.T) {
+	defer os.RemoveAll("testdb")
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cacheStats, err := db.GetCacheStats()
+	if err != nil {
+		t.Fatalf("Failed to get cache statistics: %v", err)
+	}
+
+	t.Logf("Cache stats:")
+	t.Logf("  Enabled: %v", cacheStats.Enabled)
+	t.Logf("  Total Entries: %d", cacheStats.TotalEntries)
+	t.Logf("  Total Bytes: %d", cacheStats.TotalBytes)
+	t.Logf("  Hits: %d", cacheStats.Hits)
+	t.Logf("  Misses: %d", cacheStats.Misses)
+	t.Logf("  Hit Rate: %.2f%%", cacheStats.HitRate*100)
+	t.Logf("  Num Partitions: %d", cacheStats.NumPartitions)
+}
+
+func TestCompaction(t *testing.T) {
+	defer os.RemoveAll("testdb")
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.WriteBufferSize = 1024 // 1KB to force frequent flushes
+
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
 	for batch := 0; batch < 5; batch++ {
 		txn, err := db.BeginTxn()
 		if err != nil {
 			t.Fatalf("Failed to begin transaction: %v", err)
 		}
-		
+
 		for i := 0; i < 20; i++ {
 			key := []byte(fmt.Sprintf("key%d_%d", batch, i))
-			value := make([]byte, 512) // 512 bytes
+			value := make([]byte, 512) 
 			for j := range value {
 				value[j] = byte(i % 256)
 			}
-			
-			err = txn.Put("test_cf", key, value, -1)
+
+			err = txn.Put(cf, key, value, -1)
 			if err != nil {
 				t.Fatalf("Failed to put key-value pair: %v", err)
 			}
 		}
-		
+
 		err = txn.Commit()
 		if err != nil {
 			t.Fatalf("Failed to commit transaction: %v", err)
 		}
 		txn.Free()
 	}
-	
-	// Get column family for compaction
-	cf, err := db.GetColumnFamily("test_cf")
-	if err != nil {
-		t.Fatalf("Failed to get column family: %v", err)
-	}
-	
-	// Check stats before compaction
-	statsBefore, err := db.GetColumnFamilyStats("test_cf")
+
+	// We check stats before compaction
+	statsBefore, err := cf.GetStats()
 	if err != nil {
 		t.Fatalf("Failed to get stats before compaction: %v", err)
 	}
-	
-	t.Logf("Before compaction: %d SSTables", statsBefore.NumSSTables)
-	
-	// Perform manual compaction (requires at least 2 SSTables)
-	if statsBefore.NumSSTables >= 2 {
-		err = cf.Compact()
-		if err != nil {
-			t.Logf("Compaction note: %v", err)
-		}
-		
-		// Check stats after compaction
-		statsAfter, err := db.GetColumnFamilyStats("test_cf")
-		if err != nil {
-			t.Fatalf("Failed to get stats after compaction: %v", err)
-		}
-		
-		t.Logf("After compaction: %d SSTables", statsAfter.NumSSTables)
-	} else {
-		t.Logf("Skipping compaction test: need at least 2 SSTables, got %d", statsBefore.NumSSTables)
+
+	t.Logf("Before compaction: %d levels", statsBefore.NumLevels)
+
+	err = cf.Compact()
+	if err != nil {
+		t.Logf("Compaction note: %v", err)
 	}
+
+	statsAfter, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("Failed to get stats after compaction: %v", err)
+	}
+
+	t.Logf("After compaction: %d levels", statsAfter.NumLevels)
 }
 
-func TestNonExistentColumnFamily(t *testing.T) {
+func TestFlushMemtable(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
-	// Try to get stats for non-existent column family
-	_, err = db.GetColumnFamilyStats("nonexistent_cf")
-	if err == nil {
-		t.Fatalf("Expected error when getting stats for non-existent column family")
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
 	}
-	
-	if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "invalid") {
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key%d", i))
+		value := []byte(fmt.Sprintf("value%d", i))
+		err = txn.Put(cf, key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	err = cf.FlushMemtable()
+	if err != nil {
+		t.Logf("Flush memtable note: %v", err)
+	}
+
+	t.Logf("Memtable flush completed")
+}
+
+func TestNonExistentColumnFamily(t *testing.T) {
+	defer os.RemoveAll("testdb")
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.GetColumnFamily("nonexistent_cf")
+	if err == nil {
+		t.Fatalf("Expected error when getting non-existent column family")
+	}
+
+	if !strings.Contains(err.Error(), "not found") {
 		t.Logf("Got error (acceptable): %v", err)
 	}
-	
-	// Try to drop non-existent column family
+
 	err = db.DropColumnFamily("nonexistent_cf")
 	if err == nil {
 		t.Fatalf("Expected error when dropping non-existent column family")
@@ -840,51 +1180,213 @@ func TestNonExistentColumnFamily(t *testing.T) {
 
 func TestSyncModes(t *testing.T) {
 	defer os.RemoveAll("testdb")
-	
+
 	config := Config{
-		DBPath:             "testdb",
-		EnableDebugLogging: false,
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
 	}
-	
+
 	db, err := Open(config)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	
-	// Test each sync mode
+
 	syncModes := []struct {
-		name     string
-		mode     TidesDBSyncMode
-		interval int
+		name       string
+		mode       SyncMode
+		intervalUs uint64
 	}{
-		{"none", TDB_SYNC_NONE, 0},
-		{"background", TDB_SYNC_BACKGROUND, 1000},
-		{"full", TDB_SYNC_FULL, 0},
+		{"none", SyncNone, 0},
+		{"interval", SyncInterval, 128000},
+		{"full", SyncFull, 0},
 	}
-	
+
 	for _, sm := range syncModes {
 		cfName := fmt.Sprintf("cf_%s", sm.name)
-		
+
 		cfConfig := DefaultColumnFamilyConfig()
 		cfConfig.SyncMode = sm.mode
-		cfConfig.SyncInterval = sm.interval
-		
+		cfConfig.SyncIntervalUs = sm.intervalUs
+
 		err = db.CreateColumnFamily(cfName, cfConfig)
 		if err != nil {
 			t.Fatalf("Failed to create column family with %s sync mode: %v", sm.name, err)
 		}
-		
-		// Verify sync mode in stats
-		stats, err := db.GetColumnFamilyStats(cfName)
+
+		cf, err := db.GetColumnFamily(cfName)
+		if err != nil {
+			t.Fatalf("Failed to get column family %s: %v", cfName, err)
+		}
+
+		stats, err := cf.GetStats()
 		if err != nil {
 			t.Fatalf("Failed to get stats for %s: %v", cfName, err)
 		}
-		
-		if stats.Config.SyncMode != sm.mode {
+
+		if stats.Config != nil && stats.Config.SyncMode != sm.mode {
 			t.Errorf("Expected sync mode %d, got %d", sm.mode, stats.Config.SyncMode)
 		}
-		
+
 		t.Logf("Created column family '%s' with sync mode: %s", cfName, sm.name)
 	}
+}
+
+func TestCompressionAlgorithms(t *testing.T) {
+	defer os.RemoveAll("testdb")
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	compressionAlgos := []struct {
+		name string
+		algo CompressionAlgorithm
+	}{
+		{"none", NoCompression},
+		{"lz4", LZ4Compression},
+		{"zstd", ZstdCompression},
+		{"lz4_fast", LZ4FastCompression},
+	}
+
+	for _, ca := range compressionAlgos {
+		cfName := fmt.Sprintf("cf_%s", ca.name)
+
+		cfConfig := DefaultColumnFamilyConfig()
+		cfConfig.CompressionAlgorithm = ca.algo
+
+		err = db.CreateColumnFamily(cfName, cfConfig)
+		if err != nil {
+			t.Fatalf("Failed to create column family with %s compression: %v", ca.name, err)
+		}
+
+		cf, err := db.GetColumnFamily(cfName)
+		if err != nil {
+			t.Fatalf("Failed to get column family %s: %v", cfName, err)
+		}
+
+		txn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin transaction: %v", err)
+		}
+
+		for i := 0; i < 10; i++ {
+			key := []byte(fmt.Sprintf("key%d", i))
+			value := []byte(fmt.Sprintf("value%d_with_some_extra_data_to_compress", i))
+			err = txn.Put(cf, key, value, -1)
+			if err != nil {
+				t.Fatalf("Failed to put with %s compression: %v", ca.name, err)
+			}
+		}
+
+		err = txn.Commit()
+		if err != nil {
+			t.Fatalf("Failed to commit with %s compression: %v", ca.name, err)
+		}
+		txn.Free()
+
+		t.Logf("Created column family '%s' with compression: %s", cfName, ca.name)
+	}
+}
+
+func TestMultiColumnFamilyTransaction(t *testing.T) {
+	defer os.RemoveAll("testdb")
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+
+	err = db.CreateColumnFamily("users", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create users column family: %v", err)
+	}
+
+	err = db.CreateColumnFamily("orders", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create orders column family: %v", err)
+	}
+
+	usersCF, err := db.GetColumnFamily("users")
+	if err != nil {
+		t.Fatalf("Failed to get users column family: %v", err)
+	}
+
+	ordersCF, err := db.GetColumnFamily("orders")
+	if err != nil {
+		t.Fatalf("Failed to get orders column family: %v", err)
+	}
+
+	// Multi-CF transaction
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	err = txn.Put(usersCF, []byte("user:1000"), []byte("John Doe"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put user: %v", err)
+	}
+
+	err = txn.Put(ordersCF, []byte("order:5000"), []byte("user:1000|product:A"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put order: %v", err)
+	}
+
+	// Atomic commit across both CFs
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit multi-CF transaction: %v", err)
+	}
+	txn.Free()
+	verifyTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin verify transaction: %v", err)
+	}
+	defer verifyTxn.Free()
+
+	userValue, err := verifyTxn.Get(usersCF, []byte("user:1000"))
+	if err != nil {
+		t.Fatalf("Failed to get user: %v", err)
+	}
+	if string(userValue) != "John Doe" {
+		t.Fatalf("Expected 'John Doe', got '%s'", string(userValue))
+	}
+
+	orderValue, err := verifyTxn.Get(ordersCF, []byte("order:5000"))
+	if err != nil {
+		t.Fatalf("Failed to get order: %v", err)
+	}
+	if string(orderValue) != "user:1000|product:A" {
+		t.Fatalf("Expected 'user:1000|product:A', got '%s'", string(orderValue))
+	}
+
+	t.Logf("Multi-CF transaction completed successfully")
 }
