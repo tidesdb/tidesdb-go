@@ -23,8 +23,9 @@ package tidesdb_go
 #cgo linux LDFLAGS: -lpthread -lm
 #cgo windows CFLAGS: -IC:/PROGRA~2/tidesdb/include
 #cgo windows LDFLAGS: -LC:/PROGRA~2/tidesdb/lib -lws2_32 -lbcrypt
-#include <tidesdb/tidesdb.h>
+#include <tidesdb/db.h>
 #include <stdlib.h>
+#include <string.h>
 */
 import "C"
 import (
@@ -32,110 +33,140 @@ import (
 	"unsafe"
 )
 
-// TidesDBCompressionAlgo represents the compression algorithm type.
-type TidesDBCompressionAlgo int
+// CompressionAlgorithm the compression algorithm type.
+type CompressionAlgorithm int
 
 const (
-	TDB_COMPRESS_SNAPPY TidesDBCompressionAlgo = C.COMPRESS_SNAPPY
-	TDB_COMPRESS_LZ4    TidesDBCompressionAlgo = C.COMPRESS_LZ4
-	TDB_COMPRESS_ZSTD   TidesDBCompressionAlgo = C.COMPRESS_ZSTD
+	NoCompression       CompressionAlgorithm = C.NO_COMPRESSION
+	LZ4Compression      CompressionAlgorithm = C.LZ4_COMPRESSION
+	ZstdCompression     CompressionAlgorithm = C.ZSTD_COMPRESSION
+	LZ4FastCompression  CompressionAlgorithm = C.LZ4_FAST_COMRESSION
 )
 
-// TidesDBSyncMode represents the sync mode for durability.
-type TidesDBSyncMode int
+// SyncMode the sync mode for durability.
+type SyncMode int
 
 const (
-	TDB_SYNC_NONE       TidesDBSyncMode = C.TDB_SYNC_NONE
-	TDB_SYNC_BACKGROUND TidesDBSyncMode = C.TDB_SYNC_BACKGROUND
-	TDB_SYNC_FULL       TidesDBSyncMode = C.TDB_SYNC_FULL
+	SyncNone     SyncMode = C.TDB_SYNC_NONE
+	SyncFull     SyncMode = C.TDB_SYNC_FULL
+	SyncInterval SyncMode = C.TDB_SYNC_INTERVAL
+)
+
+// LogLevel the logging level.
+type LogLevel int
+
+const (
+	LogDebug LogLevel = C.TDB_LOG_DEBUG
+	LogInfo  LogLevel = C.TDB_LOG_INFO
+	LogWarn  LogLevel = C.TDB_LOG_WARN
+	LogError LogLevel = C.TDB_LOG_ERROR
+	LogFatal LogLevel = C.TDB_LOG_FATAL
+	LogNone  LogLevel = C.TDB_LOG_NONE
+)
+
+// IsolationLevel the transaction isolation level.
+type IsolationLevel int
+
+const (
+	IsolationReadUncommitted IsolationLevel = C.TDB_ISOLATION_READ_UNCOMMITTED
+	IsolationReadCommitted   IsolationLevel = C.TDB_ISOLATION_READ_COMMITTED
+	IsolationRepeatableRead  IsolationLevel = C.TDB_ISOLATION_REPEATABLE_READ
+	IsolationSnapshot        IsolationLevel = C.TDB_ISOLATION_SNAPSHOT
+	IsolationSerializable    IsolationLevel = C.TDB_ISOLATION_SERIALIZABLE
 )
 
 // Error codes from TidesDB
 const (
-	TDB_SUCCESS                  = C.TDB_SUCCESS
-	TDB_ERROR                    = C.TDB_ERROR
-	TDB_ERR_MEMORY               = C.TDB_ERR_MEMORY
-	TDB_ERR_INVALID_ARGS         = C.TDB_ERR_INVALID_ARGS
-	TDB_ERR_IO                   = C.TDB_ERR_IO
-	TDB_ERR_NOT_FOUND            = C.TDB_ERR_NOT_FOUND
-	TDB_ERR_EXISTS               = C.TDB_ERR_EXISTS
-	TDB_ERR_CORRUPT              = C.TDB_ERR_CORRUPT
-	TDB_ERR_LOCK                 = C.TDB_ERR_LOCK
-	TDB_ERR_TXN_COMMITTED        = C.TDB_ERR_TXN_COMMITTED
-	TDB_ERR_TXN_ABORTED          = C.TDB_ERR_TXN_ABORTED
-	TDB_ERR_READONLY             = C.TDB_ERR_READONLY
-	TDB_ERR_FULL                 = C.TDB_ERR_FULL
-	TDB_ERR_INVALID_NAME         = C.TDB_ERR_INVALID_NAME
-	TDB_ERR_COMPARATOR_NOT_FOUND = C.TDB_ERR_COMPARATOR_NOT_FOUND
-	TDB_ERR_MAX_COMPARATORS      = C.TDB_ERR_MAX_COMPARATORS
-	TDB_ERR_INVALID_CF           = C.TDB_ERR_INVALID_CF
-	TDB_ERR_THREAD               = C.TDB_ERR_THREAD
-	TDB_ERR_CHECKSUM             = C.TDB_ERR_CHECKSUM
+	ErrSuccess     = C.TDB_SUCCESS
+	ErrMemory      = C.TDB_ERR_MEMORY
+	ErrInvalidArgs = C.TDB_ERR_INVALID_ARGS
+	ErrNotFound    = C.TDB_ERR_NOT_FOUND
+	ErrIO          = C.TDB_ERR_IO
+	ErrCorruption  = C.TDB_ERR_CORRUPTION
+	ErrExists      = C.TDB_ERR_EXISTS
+	ErrConflict    = C.TDB_ERR_CONFLICT
+	ErrTooLarge    = C.TDB_ERR_TOO_LARGE
+	ErrMemoryLimit = C.TDB_ERR_MEMORY_LIMIT
+	ErrInvalidDB   = C.TDB_ERR_INVALID_DB
+	ErrUnknown     = C.TDB_ERR_UNKNOWN
+	ErrLocked      = C.TDB_ERR_LOCKED
 )
 
-// TidesDB represents a TidesDB instance.
+// TidesDB is a TidesDB instance.
 type TidesDB struct {
-	tdb *C.tidesdb_t
+	db *C.tidesdb_t
 }
 
-// Iterator represents a TidesDB iterator.
+// Iterator is a TidesDB iterator.
 type Iterator struct {
 	iter *C.tidesdb_iter_t
 }
 
-// Transaction represents a TidesDB transaction.
+// Transaction is a TidesDB transaction.
 type Transaction struct {
 	txn *C.tidesdb_txn_t
 }
 
-// ColumnFamily represents a TidesDB column family.
+// ColumnFamily is a TidesDB column family.
 type ColumnFamily struct {
 	cf *C.tidesdb_column_family_t
 }
 
-// Config represents the configuration for opening a TidesDB instance.
+// Config is the configuration for opening a TidesDB instance.
 type Config struct {
-	DBPath             string
-	EnableDebugLogging bool
+	DBPath               string
+	NumFlushThreads      int
+	NumCompactionThreads int
+	LogLevel             LogLevel
+	BlockCacheSize       uint64
+	MaxOpenSSTables      uint64
 }
 
-// ColumnFamilyConfig represents the configuration for a column family.
+// ColumnFamilyConfig is the configuration for a column family.
 type ColumnFamilyConfig struct {
-	MemtableFlushSize            int
-	MaxSSTablesBeforeCompaction  int
-	CompactionThreads            int
-	MaxLevel                     int
-	Probability                  float32
-	Compressed                   bool
-	CompressAlgo                 TidesDBCompressionAlgo
-	BloomFilterFPRate            float64
-	EnableBackgroundCompaction   bool
-	BackgroundCompactionInterval int
-	UseSBHA                      bool
-	SyncMode                     TidesDBSyncMode
-	SyncInterval                 int
-	ComparatorName               *string
+	WriteBufferSize       uint64
+	LevelSizeRatio        uint64
+	MinLevels             int
+	DividingLevelOffset   int
+	KlogValueThreshold    uint64
+	CompressionAlgorithm  CompressionAlgorithm
+	EnableBloomFilter     bool
+	BloomFPR              float64
+	EnableBlockIndexes    bool
+	IndexSampleRatio      int
+	BlockIndexPrefixLen   int
+	SyncMode              SyncMode
+	SyncIntervalUs        uint64
+	ComparatorName        string
+	SkipListMaxLevel      int
+	SkipListProbability   float32
+	DefaultIsolationLevel IsolationLevel
+	MinDiskSpace          uint64
+	L1FileCountTrigger    int
+	L0QueueStallThreshold int
 }
 
-// ColumnFamilySSTableStat represents statistics about an SSTable in a column family.
-type ColumnFamilySSTableStat struct {
-	Path      string
-	Size      int64
-	NumBlocks int64
+// Stats is statistics about a column family.
+type Stats struct {
+	NumLevels        int
+	MemtableSize     uint64
+	LevelSizes       []uint64
+	LevelNumSSTables []int
+	Config           *ColumnFamilyConfig
 }
 
-// ColumnFamilyStat represents statistics about a column family.
-type ColumnFamilyStat struct {
-	Name             string
-	ComparatorName   string
-	NumSSTables      int
-	TotalSSTableSize int64
-	MemtableSize     int64
-	MemtableEntries  int
-	Config           ColumnFamilyConfig
+// CacheStats is statistics about the block cache.
+type CacheStats struct {
+	Enabled       bool
+	TotalEntries  uint64
+	TotalBytes    uint64
+	Hits          uint64
+	Misses        uint64
+	HitRate       float64
+	NumPartitions uint64
 }
 
-// errorFromCode converts a C error code to a Go error.
+// errorFromCode converts a C error code to a GO error.
 func errorFromCode(code C.int, context string) error {
 	if code == C.TDB_SUCCESS {
 		return nil
@@ -147,36 +178,26 @@ func errorFromCode(code C.int, context string) error {
 		errMsg = "memory allocation failed"
 	case C.TDB_ERR_INVALID_ARGS:
 		errMsg = "invalid arguments"
-	case C.TDB_ERR_IO:
-		errMsg = "I/O error"
 	case C.TDB_ERR_NOT_FOUND:
 		errMsg = "not found"
+	case C.TDB_ERR_IO:
+		errMsg = "I/O error"
+	case C.TDB_ERR_CORRUPTION:
+		errMsg = "data corruption"
 	case C.TDB_ERR_EXISTS:
 		errMsg = "already exists"
-	case C.TDB_ERR_CORRUPT:
-		errMsg = "data corruption"
-	case C.TDB_ERR_LOCK:
-		errMsg = "lock acquisition failed"
-	case C.TDB_ERR_TXN_COMMITTED:
-		errMsg = "transaction already committed"
-	case C.TDB_ERR_TXN_ABORTED:
-		errMsg = "transaction aborted"
-	case C.TDB_ERR_READONLY:
-		errMsg = "read-only transaction"
-	case C.TDB_ERR_FULL:
-		errMsg = "database full"
-	case C.TDB_ERR_INVALID_NAME:
-		errMsg = "invalid name"
-	case C.TDB_ERR_COMPARATOR_NOT_FOUND:
-		errMsg = "comparator not found"
-	case C.TDB_ERR_MAX_COMPARATORS:
-		errMsg = "max comparators reached"
-	case C.TDB_ERR_INVALID_CF:
-		errMsg = "invalid column family"
-	case C.TDB_ERR_THREAD:
-		errMsg = "thread operation failed"
-	case C.TDB_ERR_CHECKSUM:
-		errMsg = "checksum verification failed"
+	case C.TDB_ERR_CONFLICT:
+		errMsg = "transaction conflict"
+	case C.TDB_ERR_TOO_LARGE:
+		errMsg = "key or value too large"
+	case C.TDB_ERR_MEMORY_LIMIT:
+		errMsg = "memory limit exceeded"
+	case C.TDB_ERR_INVALID_DB:
+		errMsg = "invalid database handle"
+	case C.TDB_ERR_UNKNOWN:
+		errMsg = "unknown error"
+	case C.TDB_ERR_LOCKED:
+		errMsg = "database is locked"
 	default:
 		errMsg = "unknown error"
 	}
@@ -187,60 +208,75 @@ func errorFromCode(code C.int, context string) error {
 	return fmt.Errorf("%s (code: %d)", errMsg, code)
 }
 
+// DefaultConfig returns a default database configuration.
+func DefaultConfig() Config {
+	return Config{
+		DBPath:               "",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024, 
+		MaxOpenSSTables:      256,
+	}
+}
+
 // DefaultColumnFamilyConfig returns a default column family configuration.
 func DefaultColumnFamilyConfig() ColumnFamilyConfig {
 	cConfig := C.tidesdb_default_column_family_config()
 	return ColumnFamilyConfig{
-		MemtableFlushSize:           int(cConfig.memtable_flush_size),
-		MaxSSTablesBeforeCompaction: int(cConfig.max_sstables_before_compaction),
-		CompactionThreads:           int(cConfig.compaction_threads),
-		MaxLevel:                    int(cConfig.max_level),
-		Probability:                 float32(cConfig.probability),
-		Compressed:                  cConfig.compressed != 0,
-		CompressAlgo:                TidesDBCompressionAlgo(cConfig.compress_algo),
-		BloomFilterFPRate:           float64(cConfig.bloom_filter_fp_rate),
-		EnableBackgroundCompaction:  cConfig.enable_background_compaction != 0,
-		UseSBHA:                     cConfig.use_sbha != 0,
-		SyncMode:                    TidesDBSyncMode(cConfig.sync_mode),
-		SyncInterval:                int(cConfig.sync_interval),
-		ComparatorName:              nil,
+		WriteBufferSize:       uint64(cConfig.write_buffer_size),
+		LevelSizeRatio:        uint64(cConfig.level_size_ratio),
+		MinLevels:             int(cConfig.min_levels),
+		DividingLevelOffset:   int(cConfig.dividing_level_offset),
+		KlogValueThreshold:    uint64(cConfig.klog_value_threshold),
+		CompressionAlgorithm:  CompressionAlgorithm(cConfig.compression_algo),
+		EnableBloomFilter:     cConfig.enable_bloom_filter != 0,
+		BloomFPR:              float64(cConfig.bloom_fpr),
+		EnableBlockIndexes:    cConfig.enable_block_indexes != 0,
+		IndexSampleRatio:      int(cConfig.index_sample_ratio),
+		BlockIndexPrefixLen:   int(cConfig.block_index_prefix_len),
+		SyncMode:              SyncMode(cConfig.sync_mode),
+		SyncIntervalUs:        uint64(cConfig.sync_interval_us),
+		ComparatorName:        C.GoString(&cConfig.comparator_name[0]),
+		SkipListMaxLevel:      int(cConfig.skip_list_max_level),
+		SkipListProbability:   float32(cConfig.skip_list_probability),
+		DefaultIsolationLevel: IsolationLevel(cConfig.default_isolation_level),
+		MinDiskSpace:          uint64(cConfig.min_disk_space),
+		L1FileCountTrigger:    int(cConfig.l1_file_count_trigger),
+		L0QueueStallThreshold: int(cConfig.l0_queue_stall_threshold),
 	}
 }
 
 // Open opens a TidesDB instance with the given configuration.
 func Open(config Config) (*TidesDB, error) {
-	cConfig := C.tidesdb_config_t{
-		enable_debug_logging:  C.int(0),
-		max_open_file_handles: C.int(0), // 0 = disabled (no caching)
-	}
-	if config.EnableDebugLogging {
-		cConfig.enable_debug_logging = C.int(1)
-	}
-
 	cPath := C.CString(config.DBPath)
 	defer C.free(unsafe.Pointer(cPath))
-	// Copy path to fixed-size array
-	for i := 0; i < len(config.DBPath) && i < 1024; i++ {
-		cConfig.db_path[i] = C.char(config.DBPath[i])
-	}
-	cConfig.db_path[len(config.DBPath)] = 0
 
-	var tdb *C.tidesdb_t
-	result := C.tidesdb_open(&cConfig, &tdb)
+	cConfig := C.tidesdb_config_t{
+		db_path:                cPath,
+		num_flush_threads:      C.int(config.NumFlushThreads),
+		num_compaction_threads: C.int(config.NumCompactionThreads),
+		log_level:              C.tidesdb_log_level_t(config.LogLevel),
+		block_cache_size:       C.size_t(config.BlockCacheSize),
+		max_open_sstables:      C.size_t(config.MaxOpenSSTables),
+	}
+
+	var db *C.tidesdb_t
+	result := C.tidesdb_open(&cConfig, &db)
 	if result != C.TDB_SUCCESS {
 		return nil, errorFromCode(result, "failed to open database")
 	}
 
-	return &TidesDB{tdb: tdb}, nil
+	return &TidesDB{db: db}, nil
 }
 
 // Close closes a TidesDB instance.
 func (db *TidesDB) Close() error {
-	if db == nil || db.tdb == nil {
+	if db == nil || db.db == nil {
 		return nil
 	}
-	result := C.tidesdb_close(db.tdb)
-	db.tdb = nil
+	result := C.tidesdb_close(db.db)
+	db.db = nil
 	return errorFromCode(result, "failed to close database")
 }
 
@@ -250,38 +286,42 @@ func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) er
 	defer C.free(unsafe.Pointer(cName))
 
 	cConfig := C.tidesdb_column_family_config_t{
-		memtable_flush_size:            C.size_t(config.MemtableFlushSize),
-		max_sstables_before_compaction: C.int(config.MaxSSTablesBeforeCompaction),
-		compaction_threads:             C.int(config.CompactionThreads),
-		max_level:                      C.int(config.MaxLevel),
-		probability:                    C.float(config.Probability),
-		compressed:                     C.int(0),
-		compress_algo:                  C.compress_type(config.CompressAlgo),
-		bloom_filter_fp_rate:           C.double(config.BloomFilterFPRate),
-		enable_background_compaction:   C.int(0),
-		background_compaction_interval: C.int(config.BackgroundCompactionInterval),
-		use_sbha:                       C.int(0),
-		sync_mode:                      C.tidesdb_sync_mode_t(config.SyncMode),
-		sync_interval:                  C.int(config.SyncInterval),
-		comparator_name:                nil,
+		write_buffer_size:       C.size_t(config.WriteBufferSize),
+		level_size_ratio:        C.size_t(config.LevelSizeRatio),
+		min_levels:              C.int(config.MinLevels),
+		dividing_level_offset:   C.int(config.DividingLevelOffset),
+		klog_value_threshold:    C.size_t(config.KlogValueThreshold),
+		compression_algo:        C.compression_algorithm(config.CompressionAlgorithm),
+		enable_bloom_filter:     C.int(0),
+		bloom_fpr:               C.double(config.BloomFPR),
+		enable_block_indexes:    C.int(0),
+		index_sample_ratio:      C.int(config.IndexSampleRatio),
+		block_index_prefix_len:  C.int(config.BlockIndexPrefixLen),
+		sync_mode:               C.int(config.SyncMode),
+		sync_interval_us:        C.uint64_t(config.SyncIntervalUs),
+		skip_list_max_level:     C.int(config.SkipListMaxLevel),
+		skip_list_probability:   C.float(config.SkipListProbability),
+		default_isolation_level: C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
+		min_disk_space:          C.uint64_t(config.MinDiskSpace),
+		l1_file_count_trigger:   C.int(config.L1FileCountTrigger),
+		l0_queue_stall_threshold: C.int(config.L0QueueStallThreshold),
 	}
 
-	if config.Compressed {
-		cConfig.compressed = C.int(1)
+	if config.EnableBloomFilter {
+		cConfig.enable_bloom_filter = C.int(1)
 	}
-	if config.EnableBackgroundCompaction {
-		cConfig.enable_background_compaction = C.int(1)
+	if config.EnableBlockIndexes {
+		cConfig.enable_block_indexes = C.int(1)
 	}
-	if config.UseSBHA {
-		cConfig.use_sbha = C.int(1)
-	}
-	if config.ComparatorName != nil {
-		cCompName := C.CString(*config.ComparatorName)
+
+	if config.ComparatorName != "" {
+		cCompName := C.CString(config.ComparatorName)
 		defer C.free(unsafe.Pointer(cCompName))
-		cConfig.comparator_name = cCompName
+		C.strncpy(&cConfig.comparator_name[0], cCompName, C.TDB_MAX_COMPARATOR_NAME-1)
+		cConfig.comparator_name[C.TDB_MAX_COMPARATOR_NAME-1] = 0
 	}
 
-	result := C.tidesdb_create_column_family(db.tdb, cName, &cConfig)
+	result := C.tidesdb_create_column_family(db.db, cName, &cConfig)
 	return errorFromCode(result, "failed to create column family")
 }
 
@@ -290,7 +330,7 @@ func (db *TidesDB) DropColumnFamily(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	result := C.tidesdb_drop_column_family(db.tdb, cName)
+	result := C.tidesdb_drop_column_family(db.db, cName)
 	return errorFromCode(result, "failed to drop column family")
 }
 
@@ -299,7 +339,7 @@ func (db *TidesDB) GetColumnFamily(name string) (*ColumnFamily, error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	cf := C.tidesdb_get_column_family(db.tdb, cName)
+	cf := C.tidesdb_get_column_family(db.db, cName)
 	if cf == nil {
 		return nil, fmt.Errorf("column family not found: %s", name)
 	}
@@ -312,7 +352,7 @@ func (db *TidesDB) ListColumnFamilies() ([]string, error) {
 	var names **C.char
 	var count C.int
 
-	result := C.tidesdb_list_column_families(db.tdb, &names, &count)
+	result := C.tidesdb_list_column_families(db.db, &names, &count)
 	if result != C.TDB_SUCCESS {
 		return nil, errorFromCode(result, "failed to list column families")
 	}
@@ -323,53 +363,92 @@ func (db *TidesDB) ListColumnFamilies() ([]string, error) {
 
 	// Convert C array to Go slice
 	namesSlice := (*[1 << 30]*C.char)(unsafe.Pointer(names))[:count:count]
-	result_names := make([]string, count)
+	resultNames := make([]string, count)
 
 	for i := 0; i < int(count); i++ {
-		result_names[i] = C.GoString(namesSlice[i])
+		resultNames[i] = C.GoString(namesSlice[i])
 		C.free(unsafe.Pointer(namesSlice[i]))
 	}
 	C.free(unsafe.Pointer(names))
 
-	return result_names, nil
+	return resultNames, nil
 }
 
-// GetColumnFamilyStats retrieves statistics about a column family.
-func (db *TidesDB) GetColumnFamilyStats(name string) (*ColumnFamilyStat, error) {
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-
-	var cStats *C.tidesdb_column_family_stat_t
-	result := C.tidesdb_get_column_family_stats(db.tdb, cName, &cStats)
+// GetStats retrieves statistics about a column family.
+func (cf *ColumnFamily) GetStats() (*Stats, error) {
+	var cStats *C.tidesdb_stats_t
+	result := C.tidesdb_get_stats(cf.cf, &cStats)
 	if result != C.TDB_SUCCESS {
-		return nil, errorFromCode(result, "failed to get column family stats")
+		return nil, errorFromCode(result, "failed to get stats")
 	}
-	defer C.free(unsafe.Pointer(cStats))
+	defer C.tidesdb_free_stats(cStats)
 
-	stats := &ColumnFamilyStat{
-		Name:             C.GoString(&cStats.name[0]),
-		ComparatorName:   C.GoString(&cStats.comparator_name[0]),
-		NumSSTables:      int(cStats.num_sstables),
-		TotalSSTableSize: int64(cStats.total_sstable_size),
-		MemtableSize:     int64(cStats.memtable_size),
-		MemtableEntries:  int(cStats.memtable_entries),
-		Config: ColumnFamilyConfig{
-			MemtableFlushSize:           int(cStats.config.memtable_flush_size),
-			MaxSSTablesBeforeCompaction: int(cStats.config.max_sstables_before_compaction),
-			CompactionThreads:           int(cStats.config.compaction_threads),
-			MaxLevel:                    int(cStats.config.max_level),
-			Probability:                 float32(cStats.config.probability),
-			Compressed:                  bool(cStats.config.compressed != 0),
-			CompressAlgo:                TidesDBCompressionAlgo(cStats.config.compress_algo),
-			BloomFilterFPRate:           float64(cStats.config.bloom_filter_fp_rate),
-			EnableBackgroundCompaction:  bool(cStats.config.enable_background_compaction != 0),
-			UseSBHA:                     bool(cStats.config.use_sbha != 0),
-			SyncMode:                    TidesDBSyncMode(cStats.config.sync_mode),
-			SyncInterval:                int(cStats.config.sync_interval),
-		},
+	stats := &Stats{
+		NumLevels:    int(cStats.num_levels),
+		MemtableSize: uint64(cStats.memtable_size),
+	}
+
+	if cStats.num_levels > 0 && cStats.level_sizes != nil {
+		levelSizes := (*[1 << 30]C.size_t)(unsafe.Pointer(cStats.level_sizes))[:cStats.num_levels:cStats.num_levels]
+		stats.LevelSizes = make([]uint64, cStats.num_levels)
+		for i := 0; i < int(cStats.num_levels); i++ {
+			stats.LevelSizes[i] = uint64(levelSizes[i])
+		}
+	}
+
+	if cStats.num_levels > 0 && cStats.level_num_sstables != nil {
+		levelNumSSTables := (*[1 << 30]C.int)(unsafe.Pointer(cStats.level_num_sstables))[:cStats.num_levels:cStats.num_levels]
+		stats.LevelNumSSTables = make([]int, cStats.num_levels)
+		for i := 0; i < int(cStats.num_levels); i++ {
+			stats.LevelNumSSTables[i] = int(levelNumSSTables[i])
+		}
+	}
+
+	if cStats.config != nil {
+		stats.Config = &ColumnFamilyConfig{
+			WriteBufferSize:       uint64(cStats.config.write_buffer_size),
+			LevelSizeRatio:        uint64(cStats.config.level_size_ratio),
+			MinLevels:             int(cStats.config.min_levels),
+			DividingLevelOffset:   int(cStats.config.dividing_level_offset),
+			KlogValueThreshold:    uint64(cStats.config.klog_value_threshold),
+			CompressionAlgorithm:  CompressionAlgorithm(cStats.config.compression_algo),
+			EnableBloomFilter:     cStats.config.enable_bloom_filter != 0,
+			BloomFPR:              float64(cStats.config.bloom_fpr),
+			EnableBlockIndexes:    cStats.config.enable_block_indexes != 0,
+			IndexSampleRatio:      int(cStats.config.index_sample_ratio),
+			BlockIndexPrefixLen:   int(cStats.config.block_index_prefix_len),
+			SyncMode:              SyncMode(cStats.config.sync_mode),
+			SyncIntervalUs:        uint64(cStats.config.sync_interval_us),
+			ComparatorName:        C.GoString(&cStats.config.comparator_name[0]),
+			SkipListMaxLevel:      int(cStats.config.skip_list_max_level),
+			SkipListProbability:   float32(cStats.config.skip_list_probability),
+			DefaultIsolationLevel: IsolationLevel(cStats.config.default_isolation_level),
+			MinDiskSpace:          uint64(cStats.config.min_disk_space),
+			L1FileCountTrigger:    int(cStats.config.l1_file_count_trigger),
+			L0QueueStallThreshold: int(cStats.config.l0_queue_stall_threshold),
+		}
 	}
 
 	return stats, nil
+}
+
+// GetCacheStats retrieves statistics about the block cache.
+func (db *TidesDB) GetCacheStats() (*CacheStats, error) {
+	var cStats C.tidesdb_cache_stats_t
+	result := C.tidesdb_get_cache_stats(db.db, &cStats)
+	if result != C.TDB_SUCCESS {
+		return nil, errorFromCode(result, "failed to get cache stats")
+	}
+
+	return &CacheStats{
+		Enabled:       cStats.enabled != 0,
+		TotalEntries:  uint64(cStats.total_entries),
+		TotalBytes:    uint64(cStats.total_bytes),
+		Hits:          uint64(cStats.hits),
+		Misses:        uint64(cStats.misses),
+		HitRate:       float64(cStats.hit_rate),
+		NumPartitions: uint64(cStats.num_partitions),
+	}, nil
 }
 
 // Compact manually triggers compaction for a column family.
@@ -378,31 +457,50 @@ func (cf *ColumnFamily) Compact() error {
 	return errorFromCode(result, "failed to compact column family")
 }
 
-// BeginTxn begins a new write transaction.
+// FlushMemtable manually triggers memtable flush for a column family.
+func (cf *ColumnFamily) FlushMemtable() error {
+	result := C.tidesdb_flush_memtable(cf.cf)
+	return errorFromCode(result, "failed to flush memtable")
+}
+
+// RegisterComparator registers a custom comparator with the database.
+func (db *TidesDB) RegisterComparator(name string, ctxStr string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	var cCtxStr *C.char
+	if ctxStr != "" {
+		cCtxStr = C.CString(ctxStr)
+		defer C.free(unsafe.Pointer(cCtxStr))
+	}
+
+	result := C.tidesdb_register_comparator(db.db, cName, nil, cCtxStr, nil)
+	return errorFromCode(result, "failed to register comparator")
+}
+
+// BeginTxn begins a new transaction with default isolation level.
 func (db *TidesDB) BeginTxn() (*Transaction, error) {
 	var txn *C.tidesdb_txn_t
-	result := C.tidesdb_txn_begin(db.tdb, &txn)
+	result := C.tidesdb_txn_begin(db.db, &txn)
 	if result != C.TDB_SUCCESS {
 		return nil, errorFromCode(result, "failed to begin transaction")
 	}
 	return &Transaction{txn: txn}, nil
 }
 
-// BeginReadTxn begins a new read-only transaction.
-func (db *TidesDB) BeginReadTxn() (*Transaction, error) {
+// BeginTxnWithIsolation begins a new transaction with the specified isolation level.
+func (db *TidesDB) BeginTxnWithIsolation(isolation IsolationLevel) (*Transaction, error) {
 	var txn *C.tidesdb_txn_t
-	result := C.tidesdb_txn_begin_read(db.tdb, &txn)
+	result := C.tidesdb_txn_begin_with_isolation(db.db, C.tidesdb_isolation_level_t(isolation), &txn)
 	if result != C.TDB_SUCCESS {
-		return nil, errorFromCode(result, "failed to begin read transaction")
+		return nil, errorFromCode(result, "failed to begin transaction with isolation")
 	}
 	return &Transaction{txn: txn}, nil
 }
 
 // Put adds a key-value pair to the transaction.
-func (txn *Transaction) Put(columnFamily string, key, value []byte, ttl int64) error {
-	cfName := C.CString(columnFamily)
-	defer C.free(unsafe.Pointer(cfName))
-
+// TTL is Unix timestamp (seconds since epoch) for expiration, or -1 for no expiration.
+func (txn *Transaction) Put(cf *ColumnFamily, key, value []byte, ttl int64) error {
 	var cKey, cValue *C.uint8_t
 	if len(key) > 0 {
 		cKey = (*C.uint8_t)(unsafe.Pointer(&key[0]))
@@ -411,15 +509,12 @@ func (txn *Transaction) Put(columnFamily string, key, value []byte, ttl int64) e
 		cValue = (*C.uint8_t)(unsafe.Pointer(&value[0]))
 	}
 
-	result := C.tidesdb_txn_put(txn.txn, cfName, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), C.time_t(ttl))
+	result := C.tidesdb_txn_put(txn.txn, cf.cf, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), C.time_t(ttl))
 	return errorFromCode(result, "failed to put key-value pair")
 }
 
 // Get retrieves a value from the transaction.
-func (txn *Transaction) Get(columnFamily string, key []byte) ([]byte, error) {
-	cfName := C.CString(columnFamily)
-	defer C.free(unsafe.Pointer(cfName))
-
+func (txn *Transaction) Get(cf *ColumnFamily, key []byte) ([]byte, error) {
 	var cKey *C.uint8_t
 	if len(key) > 0 {
 		cKey = (*C.uint8_t)(unsafe.Pointer(&key[0]))
@@ -428,7 +523,7 @@ func (txn *Transaction) Get(columnFamily string, key []byte) ([]byte, error) {
 	var cValue *C.uint8_t
 	var cValueSize C.size_t
 
-	result := C.tidesdb_txn_get(txn.txn, cfName, cKey, C.size_t(len(key)), &cValue, &cValueSize)
+	result := C.tidesdb_txn_get(txn.txn, cf.cf, cKey, C.size_t(len(key)), &cValue, &cValueSize)
 	if result != C.TDB_SUCCESS {
 		return nil, errorFromCode(result, "failed to get value")
 	}
@@ -439,16 +534,13 @@ func (txn *Transaction) Get(columnFamily string, key []byte) ([]byte, error) {
 }
 
 // Delete removes a key-value pair from the transaction.
-func (txn *Transaction) Delete(columnFamily string, key []byte) error {
-	cfName := C.CString(columnFamily)
-	defer C.free(unsafe.Pointer(cfName))
-
+func (txn *Transaction) Delete(cf *ColumnFamily, key []byte) error {
 	var cKey *C.uint8_t
 	if len(key) > 0 {
 		cKey = (*C.uint8_t)(unsafe.Pointer(&key[0]))
 	}
 
-	result := C.tidesdb_txn_delete(txn.txn, cfName, cKey, C.size_t(len(key)))
+	result := C.tidesdb_txn_delete(txn.txn, cf.cf, cKey, C.size_t(len(key)))
 	return errorFromCode(result, "failed to delete key")
 }
 
@@ -466,16 +558,43 @@ func (txn *Transaction) Rollback() error {
 
 // Free frees the transaction resources.
 func (txn *Transaction) Free() {
-	C.tidesdb_txn_free(txn.txn)
+	if txn != nil && txn.txn != nil {
+		C.tidesdb_txn_free(txn.txn)
+		txn.txn = nil
+	}
+}
+
+// Savepoint creates a savepoint within the transaction.
+func (txn *Transaction) Savepoint(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	result := C.tidesdb_txn_savepoint(txn.txn, cName)
+	return errorFromCode(result, "failed to create savepoint")
+}
+
+// RollbackToSavepoint rolls back the transaction to a savepoint.
+func (txn *Transaction) RollbackToSavepoint(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	result := C.tidesdb_txn_rollback_to_savepoint(txn.txn, cName)
+	return errorFromCode(result, "failed to rollback to savepoint")
+}
+
+// ReleaseSavepoint releases a savepoint without rolling back.
+func (txn *Transaction) ReleaseSavepoint(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	result := C.tidesdb_txn_release_savepoint(txn.txn, cName)
+	return errorFromCode(result, "failed to release savepoint")
 }
 
 // NewIterator creates a new iterator for a column family within a transaction.
-func (txn *Transaction) NewIterator(columnFamily string) (*Iterator, error) {
-	cfName := C.CString(columnFamily)
-	defer C.free(unsafe.Pointer(cfName))
-
+func (txn *Transaction) NewIterator(cf *ColumnFamily) (*Iterator, error) {
 	var iter *C.tidesdb_iter_t
-	result := C.tidesdb_iter_new(txn.txn, cfName, &iter)
+	result := C.tidesdb_iter_new(txn.txn, cf.cf, &iter)
 	if result != C.TDB_SUCCESS {
 		return nil, errorFromCode(result, "failed to create iterator")
 	}
@@ -483,23 +602,37 @@ func (txn *Transaction) NewIterator(columnFamily string) (*Iterator, error) {
 }
 
 // SeekToFirst positions the iterator at the first key.
-// Note: This automatically advances to the first valid entry.
 func (iter *Iterator) SeekToFirst() error {
 	result := C.tidesdb_iter_seek_to_first(iter.iter)
-	if result != C.TDB_SUCCESS {
-		return errorFromCode(result, "failed to seek to first")
-	}
-	return nil
+	return errorFromCode(result, "failed to seek to first")
 }
 
 // SeekToLast positions the iterator at the last key.
-// Note: This automatically moves to the last valid entry.
 func (iter *Iterator) SeekToLast() error {
 	result := C.tidesdb_iter_seek_to_last(iter.iter)
-	if result != C.TDB_SUCCESS {
-		return errorFromCode(result, "failed to seek to last")
+	return errorFromCode(result, "failed to seek to last")
+}
+
+// Seek positions the iterator at the first key >= target key.
+func (iter *Iterator) Seek(key []byte) error {
+	var cKey *C.uint8_t
+	if len(key) > 0 {
+		cKey = (*C.uint8_t)(unsafe.Pointer(&key[0]))
 	}
-	return nil
+
+	result := C.tidesdb_iter_seek(iter.iter, cKey, C.size_t(len(key)))
+	return errorFromCode(result, "failed to seek")
+}
+
+// SeekForPrev positions the iterator at the last key <= target key.
+func (iter *Iterator) SeekForPrev(key []byte) error {
+	var cKey *C.uint8_t
+	if len(key) > 0 {
+		cKey = (*C.uint8_t)(unsafe.Pointer(&key[0]))
+	}
+
+	result := C.tidesdb_iter_seek_for_prev(iter.iter, cKey, C.size_t(len(key)))
+	return errorFromCode(result, "failed to seek for prev")
 }
 
 // Valid returns true if the iterator is positioned at a valid entry.
@@ -508,13 +641,15 @@ func (iter *Iterator) Valid() bool {
 }
 
 // Next moves the iterator to the next entry.
-func (iter *Iterator) Next() {
-	C.tidesdb_iter_next(iter.iter)
+func (iter *Iterator) Next() error {
+	result := C.tidesdb_iter_next(iter.iter)
+	return errorFromCode(result, "failed to move to next")
 }
 
 // Prev moves the iterator to the previous entry.
-func (iter *Iterator) Prev() {
-	C.tidesdb_iter_prev(iter.iter)
+func (iter *Iterator) Prev() error {
+	result := C.tidesdb_iter_prev(iter.iter)
+	return errorFromCode(result, "failed to move to prev")
 }
 
 // Key retrieves the current key from the iterator.
@@ -527,7 +662,6 @@ func (iter *Iterator) Key() ([]byte, error) {
 		return nil, errorFromCode(result, "failed to get key")
 	}
 
-	// Note: Don't free cKey - it's managed by the iterator and freed with tidesdb_iter_free
 	key := C.GoBytes(unsafe.Pointer(cKey), C.int(cKeySize))
 	return key, nil
 }
@@ -542,12 +676,14 @@ func (iter *Iterator) Value() ([]byte, error) {
 		return nil, errorFromCode(result, "failed to get value")
 	}
 
-	// Note: Don't free cValue - it's managed by the iterator and freed with tidesdb_iter_free
 	value := C.GoBytes(unsafe.Pointer(cValue), C.int(cValueSize))
 	return value, nil
 }
 
 // Free frees the iterator resources.
 func (iter *Iterator) Free() {
-	C.tidesdb_iter_free(iter.iter)
+	if iter != nil && iter.iter != nil {
+		C.tidesdb_iter_free(iter.iter)
+		iter.iter = nil
+	}
 }

@@ -1,4 +1,4 @@
-name: TidesDB Go CI
+name: TidesDB GO CI
 
 on:
   push:

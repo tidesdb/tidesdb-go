@@ -1,32 +1,30 @@
 # tidesdb-go
 
-tidesdb-go is the official Go binding for TidesDB v1.
+tidesdb-go is the official GO binding for TidesDB.
 
-TidesDB is a fast and efficient key-value storage engine library written in C. The underlying data structure is based on a log-structured merge-tree (LSM-tree). This Go binding provides a safe, idiomatic Go interface to TidesDB with full support for all v1 features.
+TidesDB is a fast and efficient key-value storage engine library written in C. The underlying data structure is based on a log-structured merge-tree (LSM-tree). This GO binding provides a safe, idiomatic GO interface to TidesDB with full support for all features.
 
 ## Features
 
-- **ACID Transactions** - Atomic, consistent, isolated, and durable transactions across column families
-- **Optimized Concurrency** - Multiple concurrent readers, writers don't block readers
-- **Column Families** - Isolated key-value stores with independent configuration
-- **Bidirectional Iterators** - Iterate forward and backward over sorted key-value pairs
-- **TTL Support** - Time-to-live for automatic key expiration
-- **Compression** - Snappy, LZ4, or ZSTD compression support
-- **Bloom Filters** - Reduce disk reads with configurable false positive rates
-- **Background Compaction** - Automatic or manual SSTable compaction with parallel execution
-- **Sync Modes** - Three durability levels: NONE, BACKGROUND, FULL
-- **Custom Comparators** - Register custom key comparison functions
-- **Error Handling** - Detailed error codes for production use
+- Full ACID transaction support with savepoints
+- MVCC with five isolation levels from READ UNCOMMITTED to SERIALIZABLE
+- Column families aka isolated key-value stores with independent configuration
+- Bidirectional iterators with forward/backward traversal with seek support
+- TTL(time to live) support with automatic key expiration and clean up
+- LZ4, LZ4 Fast, ZSTD, or no compression
+- Bloom filters with configurable false positive rates
+- Global block CLOCK cache for hot blocks
+- Automatic with configurable thread pools (sorted runs, compaction)
+- Six built-in plus custom registration
 
 ## Getting Started
 
 ### Prerequisites
 
-You must have the TidesDB v1 shared C library installed on your system.
+You must have the TidesDB shared C library installed on your system.
 
 **Building TidesDB**
 ```bash
-# Clone TidesDB repository
 git clone https://github.com/tidesdb/tidesdb.git
 cd tidesdb
 
@@ -40,16 +38,15 @@ sudo cmake --install build
 - Snappy
 - LZ4
 - Zstandard
-- OpenSSL
 
 **On Ubuntu/Debian**
 ```bash
-sudo apt install libzstd-dev liblz4-dev libsnappy-dev libssl-dev
+sudo apt install libzstd-dev liblz4-dev libsnappy-dev
 ```
 
 **On macOS**
 ```bash
-brew install zstd lz4 snappy openssl
+brew install zstd lz4 snappy
 ```
 
 ### Installation
@@ -71,7 +68,7 @@ export CGO_LDFLAGS="-L/custom/path/lib -ltidesdb"
 go get github.com/tidesdb/tidesdb-go
 ```
 
-**Example: Custom prefix installation**
+**Custom prefix installation**
 ```bash
 # Install TidesDB to custom location
 cd tidesdb
@@ -104,10 +101,13 @@ import (
 )
 
 func main() {
-    // Configure and open database
     config := tidesdb.Config{
-        DBPath:             "./mydb",
-        EnableDebugLogging: false,
+        DBPath:               "./mydb",
+        NumFlushThreads:      2,
+        NumCompactionThreads: 2,
+        LogLevel:             tidesdb.LogInfo,
+        BlockCacheSize:       64 * 1024 * 1024, 
+        MaxOpenSSTables:      256,
     }
     
     db, err := tidesdb.Open(config)
@@ -125,31 +125,32 @@ func main() {
 Column families are isolated key-value stores with independent configuration.
 
 ```go
-// Create with default configuration
 cfConfig := tidesdb.DefaultColumnFamilyConfig()
 err := db.CreateColumnFamily("my_cf", cfConfig)
 if err != nil {
     log.Fatal(err)
 }
 
-// Create with custom configuration
+// Create with custom configuration based on defaults
 cfConfig := tidesdb.DefaultColumnFamilyConfig()
-cfConfig.MemtableFlushSize = 128 * 1024 * 1024  // 128MB
-cfConfig.MaxSSTablesBeforeCompaction = 512       // Trigger compaction at 512 SSTables
-cfConfig.CompactionThreads = 4                   // Use 4 threads for parallel compaction
-cfConfig.Compressed = true
-cfConfig.CompressAlgo = tidesdb.TDB_COMPRESS_LZ4
-cfConfig.BloomFilterFPRate = 0.01               // 1% false positive rate
-cfConfig.EnableBackgroundCompaction = true
-cfConfig.SyncMode = tidesdb.TDB_SYNC_BACKGROUND
-cfConfig.SyncInterval = 1000                     // Sync every 1 second
+
+// You can modify the configuration as needed
+cfConfig.WriteBufferSize = 128 * 1024 * 1024   
+cfConfig.LevelSizeRatio = 10                    
+cfConfig.MinLevels = 5                           
+cfConfig.CompressionAlgorithm = tidesdb.LZ4Compression
+cfConfig.EnableBloomFilter = true
+cfConfig.BloomFPR = 0.01                        
+cfConfig.EnableBlockIndexes = true
+cfConfig.SyncMode = tidesdb.SyncInterval
+cfConfig.SyncIntervalUs = 128000                  
+cfConfig.DefaultIsolationLevel = tidesdb.IsolationReadCommitted
 
 err = db.CreateColumnFamily("my_cf", cfConfig)
 if err != nil {
     log.Fatal(err)
 }
 
-// Drop a column family
 err = db.DropColumnFamily("my_cf")
 if err != nil {
     log.Fatal(err)
@@ -158,12 +159,16 @@ if err != nil {
 
 ### CRUD Operations
 
-All operations in TidesDB v1 are performed through transactions for ACID guarantees.
+All operations in TidesDB are performed through transactions for ACID guarantees.
 
 #### Writing Data
 
 ```go
-// Begin a write transaction
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
 txn, err := db.BeginTxn()
 if err != nil {
     log.Fatal(err)
@@ -171,12 +176,11 @@ if err != nil {
 defer txn.Free()
 
 // Put a key-value pair (TTL -1 means no expiration)
-err = txn.Put("my_cf", []byte("key"), []byte("value"), -1)
+err = txn.Put(cf, []byte("key"), []byte("value"), -1)
 if err != nil {
     log.Fatal(err)
 }
 
-// Commit the transaction
 err = txn.Commit()
 if err != nil {
     log.Fatal(err)
@@ -188,6 +192,11 @@ if err != nil {
 ```go
 import "time"
 
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
 txn, err := db.BeginTxn()
 if err != nil {
     log.Fatal(err)
@@ -197,7 +206,7 @@ defer txn.Free()
 // Set expiration time (Unix timestamp)
 ttl := time.Now().Add(10 * time.Second).Unix()
 
-err = txn.Put("my_cf", []byte("temp_key"), []byte("temp_value"), ttl)
+err = txn.Put(cf, []byte("temp_key"), []byte("temp_value"), ttl)
 if err != nil {
     log.Fatal(err)
 }
@@ -220,21 +229,24 @@ ttl := time.Now().Add(5 * time.Minute).Unix()
 ttl := time.Now().Add(1 * time.Hour).Unix()
 
 // Expire at specific time
-ttl := time.Date(2025, 12, 31, 23, 59, 59, 0, time.UTC).Unix()
+ttl := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC).Unix()
 ```
 
 #### Reading Data
 
 ```go
-// Begin a read-only transaction
-txn, err := db.BeginReadTxn()
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
+txn, err := db.BeginTxn()
 if err != nil {
     log.Fatal(err)
 }
 defer txn.Free()
 
-// Get a value
-value, err := txn.Get("my_cf", []byte("key"))
+value, err := txn.Get(cf, []byte("key"))
 if err != nil {
     log.Fatal(err)
 }
@@ -245,13 +257,18 @@ fmt.Printf("Value: %s\n", value)
 #### Deleting Data
 
 ```go
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
 txn, err := db.BeginTxn()
 if err != nil {
     log.Fatal(err)
 }
 defer txn.Free()
 
-err = txn.Delete("my_cf", []byte("key"))
+err = txn.Delete(cf, []byte("key"))
 if err != nil {
     log.Fatal(err)
 }
@@ -265,32 +282,37 @@ if err != nil {
 #### Multi-Operation Transactions
 
 ```go
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
 txn, err := db.BeginTxn()
 if err != nil {
     log.Fatal(err)
 }
 defer txn.Free()
 
-// Multiple operations in one transaction
-err = txn.Put("my_cf", []byte("key1"), []byte("value1"), -1)
+// Multiple operations in one transaction, across column families as well
+err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
 if err != nil {
     txn.Rollback()
     log.Fatal(err)
 }
 
-err = txn.Put("my_cf", []byte("key2"), []byte("value2"), -1)
+err = txn.Put(cf, []byte("key2"), []byte("value2"), -1)
 if err != nil {
     txn.Rollback()
     log.Fatal(err)
 }
 
-err = txn.Delete("my_cf", []byte("old_key"))
+err = txn.Delete(cf, []byte("old_key"))
 if err != nil {
     txn.Rollback()
     log.Fatal(err)
 }
 
-// Commit atomically - all or nothing
+// Commit atomically -- all or nothing
 err = txn.Commit()
 if err != nil {
     log.Fatal(err)
@@ -304,19 +326,23 @@ Iterators provide efficient bidirectional traversal over key-value pairs.
 #### Forward Iteration
 
 ```go
-txn, err := db.BeginReadTxn()
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
+txn, err := db.BeginTxn()
 if err != nil {
     log.Fatal(err)
 }
 defer txn.Free()
 
-iter, err := txn.NewIterator("my_cf")
+iter, err := txn.NewIterator(cf)
 if err != nil {
     log.Fatal(err)
 }
 defer iter.Free()
 
-// Seek to first entry
 iter.SeekToFirst()
 
 for iter.Valid() {
@@ -339,19 +365,23 @@ for iter.Valid() {
 #### Backward Iteration
 
 ```go
-txn, err := db.BeginReadTxn()
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
+txn, err := db.BeginTxn()
 if err != nil {
     log.Fatal(err)
 }
 defer txn.Free()
 
-iter, err := txn.NewIterator("my_cf")
+iter, err := txn.NewIterator(cf)
 if err != nil {
     log.Fatal(err)
 }
 defer iter.Free()
 
-// Seek to last entry
 iter.SeekToLast()
 
 for iter.Valid() {
@@ -376,20 +406,25 @@ for iter.Valid() {
 Retrieve detailed statistics about a column family.
 
 ```go
-stats, err := db.GetColumnFamilyStats("my_cf")
+cf, err := db.GetColumnFamily("my_cf")
 if err != nil {
     log.Fatal(err)
 }
 
-fmt.Printf("Column Family: %s\n", stats.Name)
-fmt.Printf("Comparator: %s\n", stats.ComparatorName)
-fmt.Printf("Number of SSTables: %d\n", stats.NumSSTables)
-fmt.Printf("Total SSTable Size: %d bytes\n", stats.TotalSSTableSize)
+stats, err := cf.GetStats()
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Number of Levels: %d\n", stats.NumLevels)
 fmt.Printf("Memtable Size: %d bytes\n", stats.MemtableSize)
-fmt.Printf("Memtable Entries: %d\n", stats.MemtableEntries)
-fmt.Printf("Compression: %v\n", stats.Config.Compressed)
-fmt.Printf("Bloom Filter FP Rate: %.4f\n", stats.Config.BloomFilterFPRate)
-fmt.Printf("Sync Mode: %d\n", stats.Config.SyncMode)
+
+if stats.Config != nil {
+    fmt.Printf("Write Buffer Size: %d\n", stats.Config.WriteBufferSize)
+    fmt.Printf("Compression: %d\n", stats.Config.CompressionAlgorithm)
+    fmt.Printf("Bloom Filter: %v\n", stats.Config.EnableBloomFilter)
+    fmt.Printf("Sync Mode: %d\n", stats.Config.SyncMode)
+}
 ```
 
 ### Listing Column Families
@@ -408,38 +443,33 @@ for _, name := range cfList {
 
 ### Compaction
 
-Compaction merges SSTables, removes tombstones and expired keys.
-
-#### Automatic Background Compaction
-
-```go
-// Enable during column family creation
-cfConfig := tidesdb.DefaultColumnFamilyConfig()
-cfConfig.EnableBackgroundCompaction = true
-cfConfig.MaxSSTablesBeforeCompaction = 128  // Trigger at 128 SSTables
-cfConfig.CompactionThreads = 4              // Use 4 threads for parallel compaction
-
-err := db.CreateColumnFamily("my_cf", cfConfig)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Background compaction runs automatically when threshold is reached
-```
-
 #### Manual Compaction
 
 ```go
-// Get column family
 cf, err := db.GetColumnFamily("my_cf")
 if err != nil {
     log.Fatal(err)
 }
 
-// Manually trigger compaction (requires minimum 2 SSTables)
+// Manually trigger compaction (queues compaction from L1+)
 err = cf.Compact()
 if err != nil {
     log.Printf("Compaction note: %v", err)
+}
+```
+
+#### Manual Memtable Flush
+
+```go
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Manually trigger memtable flush (queues memtable for sorted run to disk (L1))
+err = cf.FlushMemtable()
+if err != nil {
+    log.Printf("Flush note: %v", err)
 }
 ```
 
@@ -447,7 +477,6 @@ if err != nil {
 - Removes tombstones and expired TTL entries
 - Merges duplicate keys (keeps latest version)
 - Reduces SSTable count
-- Parallel compaction speeds up large compactions
 - Background compaction is non-blocking
 
 ### Sync Modes
@@ -457,15 +486,15 @@ Control the durability vs performance tradeoff.
 ```go
 cfConfig := tidesdb.DefaultColumnFamilyConfig()
 
-// TDB_SYNC_NONE - Fastest, least durable (OS handles flushing)
-cfConfig.SyncMode = tidesdb.TDB_SYNC_NONE
+// SyncNone -- Fastest, least durable (OS handles flushing on sorted runs and compaction to sync after completion)
+cfConfig.SyncMode = tidesdb.SyncNone
 
-// TDB_SYNC_BACKGROUND - Balanced (fsync every N milliseconds in background)
-cfConfig.SyncMode = tidesdb.TDB_SYNC_BACKGROUND
-cfConfig.SyncInterval = 1000  // Sync every 1000ms (1 second)
+// SyncInterval -- Balanced (periodic background syncing)
+cfConfig.SyncMode = tidesdb.SyncInterval
+cfConfig.SyncIntervalUs = 128000  // Sync every 128ms
 
-// TDB_SYNC_FULL - Most durable (fsync on every write)
-cfConfig.SyncMode = tidesdb.TDB_SYNC_FULL
+// SyncFull -- Most durable (fsync on every write)
+cfConfig.SyncMode = tidesdb.SyncFull
 
 err := db.CreateColumnFamily("my_cf", cfConfig)
 if err != nil {
@@ -479,13 +508,11 @@ TidesDB supports multiple compression algorithms:
 
 ```go
 cfConfig := tidesdb.DefaultColumnFamilyConfig()
-cfConfig.Compressed = true
 
-// Available compression algorithms
-cfConfig.CompressAlgo = tidesdb.TDB_NO_COMPRESSION   // No compression
-cfConfig.CompressAlgo = tidesdb.TDB_COMPRESS_SNAPPY  // Snappy (fast)
-cfConfig.CompressAlgo = tidesdb.TDB_COMPRESS_LZ4     // LZ4 (very fast)
-cfConfig.CompressAlgo = tidesdb.TDB_COMPRESS_ZSTD    // Zstandard (high compression)
+cfConfig.CompressionAlgorithm = tidesdb.NoCompression     
+cfConfig.CompressionAlgorithm = tidesdb.LZ4Compression    
+cfConfig.CompressionAlgorithm = tidesdb.LZ4FastCompression 
+cfConfig.CompressionAlgorithm = tidesdb.ZstdCompression   
 
 err := db.CreateColumnFamily("my_cf", cfConfig)
 if err != nil {
@@ -495,22 +522,27 @@ if err != nil {
 
 ## Error Handling
 
-TidesDB v1 provides detailed error codes for production use.
+TidesDB provides detailed error codes for production use.
 
 ```go
+cf, err := db.GetColumnFamily("my_cf")
+if err != nil {
+    log.Fatal(err)
+}
+
 txn, err := db.BeginTxn()
 if err != nil {
     log.Fatal(err)
 }
 defer txn.Free()
 
-err = txn.Put("my_cf", []byte("key"), []byte("value"), -1)
+err = txn.Put(cf, []byte("key"), []byte("value"), -1)
 if err != nil {
     // Errors include context and error codes
     fmt.Printf("Error: %v\n", err)
     
     // Example error message:
-    // "failed to put key-value pair: memory allocation failed (code: -2)"
+    // "failed to put key-value pair: memory allocation failed (code: -1)"
     
     txn.Rollback()
     return
@@ -523,24 +555,19 @@ if err != nil {
 ```
 
 **Error Codes**
-- `TDB_SUCCESS` (0) - Operation successful
-- `TDB_ERR_MEMORY` (-2) - Memory allocation failed
-- `TDB_ERR_INVALID_ARGS` (-3) - Invalid arguments
-- `TDB_ERR_IO` (-4) - I/O error
-- `TDB_ERR_NOT_FOUND` (-5) - Key not found
-- `TDB_ERR_EXISTS` (-6) - Resource already exists
-- `TDB_ERR_CORRUPT` (-7) - Data corruption
-- `TDB_ERR_LOCK` (-8) - Lock acquisition failed
-- `TDB_ERR_TXN_COMMITTED` (-9) - Transaction already committed
-- `TDB_ERR_TXN_ABORTED` (-10) - Transaction aborted
-- `TDB_ERR_READONLY` (-11) - Write on read-only transaction
-- `TDB_ERR_FULL` (-12) - Database full
-- `TDB_ERR_INVALID_NAME` (-13) - Invalid name
-- `TDB_ERR_COMPARATOR_NOT_FOUND` (-14) - Comparator not found
-- `TDB_ERR_MAX_COMPARATORS` (-15) - Max comparators reached
-- `TDB_ERR_INVALID_CF` (-16) - Invalid column family
-- `TDB_ERR_THREAD` (-17) - Thread operation failed
-- `TDB_ERR_CHECKSUM` (-18) - Checksum verification failed
+- `ErrSuccess` (0) -- Operation successful
+- `ErrMemory` (-1) -- Memory allocation failed
+- `ErrInvalidArgs` (-2) -- Invalid arguments
+- `ErrNotFound` (-3) -- Key not found
+- `ErrIO` (-4) -- I/O error
+- `ErrCorruption` (-5) -- Data corruption
+- `ErrExists` (-6) -- Resource already exists
+- `ErrConflict` (-7) -- Transaction conflict
+- `ErrTooLarge` (-8) -- Key or value too large
+- `ErrMemoryLimit` (-9) -- Memory limit exceeded
+- `ErrInvalidDB` (-10) -- Invalid database handle
+- `ErrUnknown` (-11) -- Unknown error
+- `ErrLocked` (-12) -- Database is locked
 
 ## Complete Example
 
@@ -556,10 +583,13 @@ import (
 )
 
 func main() {
-    // Open database
     config := tidesdb.Config{
-        DBPath:             "./example_db",
-        EnableDebugLogging: false,
+        DBPath:               "./example_db",
+        NumFlushThreads:      2,
+        NumCompactionThreads: 2,
+        LogLevel:             tidesdb.LogInfo,
+        BlockCacheSize:       64 * 1024 * 1024,
+        MaxOpenSSTables:      256,
     }
     
     db, err := tidesdb.Open(config)
@@ -568,15 +598,13 @@ func main() {
     }
     defer db.Close()
     
-    // Create column family with custom configuration
     cfConfig := tidesdb.DefaultColumnFamilyConfig()
-    cfConfig.MemtableFlushSize = 64 * 1024 * 1024
-    cfConfig.Compressed = true
-    cfConfig.CompressAlgo = tidesdb.TDB_COMPRESS_LZ4
-    cfConfig.BloomFilterFPRate = 0.01
-    cfConfig.EnableBackgroundCompaction = true
-    cfConfig.SyncMode = tidesdb.TDB_SYNC_BACKGROUND
-    cfConfig.SyncInterval = 1000
+    cfConfig.WriteBufferSize = 64 * 1024 * 1024
+    cfConfig.CompressionAlgorithm = tidesdb.LZ4Compression
+    cfConfig.EnableBloomFilter = true
+    cfConfig.BloomFPR = 0.01
+    cfConfig.SyncMode = tidesdb.SyncInterval
+    cfConfig.SyncIntervalUs = 128000
     
     err = db.CreateColumnFamily("users", cfConfig)
     if err != nil {
@@ -584,19 +612,23 @@ func main() {
     }
     defer db.DropColumnFamily("users")
     
-    // Write data with transaction
+    cf, err := db.GetColumnFamily("users")
+    if err != nil {
+        log.Fatal(err)
+    }
+    
     txn, err := db.BeginTxn()
     if err != nil {
         log.Fatal(err)
     }
     
-    err = txn.Put("users", []byte("user:1"), []byte("Alice"), -1)
+    err = txn.Put(cf, []byte("user:1"), []byte("Alice"), -1)
     if err != nil {
         txn.Rollback()
         log.Fatal(err)
     }
     
-    err = txn.Put("users", []byte("user:2"), []byte("Bob"), -1)
+    err = txn.Put(cf, []byte("user:2"), []byte("Bob"), -1)
     if err != nil {
         txn.Rollback()
         log.Fatal(err)
@@ -604,7 +636,7 @@ func main() {
     
     // Add temporary data with TTL
     ttl := time.Now().Add(30 * time.Second).Unix()
-    err = txn.Put("users", []byte("session:abc"), []byte("temp_data"), ttl)
+    err = txn.Put(cf, []byte("session:abc"), []byte("temp_data"), ttl)
     if err != nil {
         txn.Rollback()
         log.Fatal(err)
@@ -616,21 +648,19 @@ func main() {
     }
     txn.Free()
     
-    // Read data
-    readTxn, err := db.BeginReadTxn()
+    readTxn, err := db.BeginTxn()
     if err != nil {
         log.Fatal(err)
     }
     defer readTxn.Free()
     
-    value, err := readTxn.Get("users", []byte("user:1"))
+    value, err := readTxn.Get(cf, []byte("user:1"))
     if err != nil {
         log.Fatal(err)
     }
     fmt.Printf("user:1 = %s\n", value)
     
-    // Iterate over all entries
-    iter, err := readTxn.NewIterator("users")
+    iter, err := readTxn.NewIterator(cf)
     if err != nil {
         log.Fatal(err)
     }
@@ -645,46 +675,58 @@ func main() {
         iter.Next()
     }
     
-    // Get statistics
-    stats, err := db.GetColumnFamilyStats("users")
+    stats, err := cf.GetStats()
     if err != nil {
         log.Fatal(err)
     }
     
     fmt.Printf("\nColumn Family Statistics:\n")
-    fmt.Printf("  Name: %s\n", stats.Name)
+    fmt.Printf("  Number of Levels: %d\n", stats.NumLevels)
     fmt.Printf("  Memtable Size: %d bytes\n", stats.MemtableSize)
-    fmt.Printf("  Memtable Entries: %d\n", stats.MemtableEntries)
-    fmt.Printf("  Number of SSTables: %d\n", stats.NumSSTables)
 }
 ```
 
-## Concurrency Model
+## Isolation Levels
 
-TidesDB is designed for high concurrency:
+TidesDB supports five MVCC isolation levels:
 
-- **Multiple readers can read concurrently** - No blocking between readers
-- **Writers don't block readers** - Readers can access data during writes
-- **Writers block other writers** - Only one writer per column family at a time
-- **Read transactions** (`BeginReadTxn`) acquire read locks
-- **Write transactions** (`BeginTxn`) acquire write locks on commit
-- **Different column families** can be written concurrently
+```go
+txn, err := db.BeginTxnWithIsolation(tidesdb.IsolationReadCommitted)
+if err != nil {
+    log.Fatal(err)
+}
+defer txn.Free()
+```
 
-**Optimal for**
-- Read-heavy workloads
-- Mixed read/write workloads
-- Multi-column-family applications
+**Available Isolation Levels**
+- `IsolationReadUncommitted` -- Sees all data including uncommitted changes
+- `IsolationReadCommitted` -- Sees only committed data (default)
+- `IsolationRepeatableRead` -- Consistent snapshot, phantom reads possible
+- `IsolationSnapshot` -- Write-write conflict detection
+- `IsolationSerializable` -- Full read-write conflict detection (SSI)
 
-## Performance Tips
+## Savepoints
 
-1. **Batch operations** in transactions for better performance
-2. **Use appropriate sync mode** for your durability requirements
-3. **Enable background compaction** for automatic maintenance
-4. **Adjust memtable flush size** based on your workload
-5. **Use compression** to reduce disk usage and I/O
-6. **Configure bloom filters** to reduce unnecessary disk reads
-7. **Set appropriate TTL** to automatically expire old data
-8. **Use parallel compaction** for faster SSTable merging
+Savepoints allow partial rollback within a transaction:
+
+```go
+txn, err := db.BeginTxn()
+if err != nil {
+    log.Fatal(err)
+}
+defer txn.Free()
+
+err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
+
+err = txn.Savepoint("sp1")
+err = txn.Put(cf, []byte("key2"), []byte("value2"), -1)
+
+// Rollback to savepoint -- key2 is discarded, key1 remains
+err = txn.RollbackToSavepoint("sp1")
+
+// Commit -- only key1 is written
+err = txn.Commit()
+```
 
 ## Testing
 
@@ -706,13 +748,10 @@ Multiple licenses apply:
 ```
 Mozilla Public License Version 2.0 (TidesDB)
 
--- AND --
-
 BSD 3 Clause (Snappy)
 BSD 2 (LZ4)
 BSD 2 (xxHash - Yann Collet)
 BSD (Zstandard)
-Apache 2.0 (OpenSSL 3.0+) / OpenSSL License (OpenSSL 1.x)
 ```
 
 ## Contributing
@@ -725,9 +764,3 @@ For issues, questions, or discussions
 - GitHub Issues https://github.com/tidesdb/tidesdb-go/issues
 - Discord Community https://discord.gg/tWEmjR66cy
 - Main TidesDB Repository https://github.com/tidesdb/tidesdb
-
-## Links
-
-- [TidesDB Main Repository](https://github.com/tidesdb/tidesdb)
-- [TidesDB Documentation](https://github.com/tidesdb/tidesdb#readme)
-- [Other Language Bindings](https://github.com/tidesdb/tidesdb#bindings)
