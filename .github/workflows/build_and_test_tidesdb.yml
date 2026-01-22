@@ -86,16 +86,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          # Get Windows-style path for MSYS2 prefix
           MINGW_PREFIX_WIN=$(cygpath -m /mingw64)
 
-          # Create cmake config directory
           mkdir -p /mingw64/lib/cmake/lz4
           mkdir -p /mingw64/lib/cmake/zstd
           mkdir -p /mingw64/lib/cmake/Snappy
           mkdir -p /mingw64/lib/cmake/PThreads4W
 
-          # Create lz4-config.cmake
           cat > /mingw64/lib/cmake/lz4/lz4-config.cmake << EOF
           if(NOT TARGET lz4::lz4)
             add_library(lz4::lz4 SHARED IMPORTED)
@@ -107,7 +104,6 @@ jobs:
           endif()
           EOF
 
-          # Create zstd-config.cmake
           cat > /mingw64/lib/cmake/zstd/zstd-config.cmake << EOF
           if(NOT TARGET zstd::libzstd_shared)
             add_library(zstd::libzstd_shared SHARED IMPORTED)
@@ -119,7 +115,6 @@ jobs:
           endif()
           EOF
 
-          # Create Snappy-config.cmake
           cat > /mingw64/lib/cmake/Snappy/Snappy-config.cmake << EOF
           if(NOT TARGET Snappy::snappy)
             add_library(Snappy::snappy SHARED IMPORTED)
@@ -131,7 +126,6 @@ jobs:
           endif()
           EOF
 
-          # Create PThreads4W-config.cmake (MSYS2 uses winpthreads)
           cat > /mingw64/lib/cmake/PThreads4W/PThreads4W-config.cmake << EOF
           if(NOT TARGET PThreads4W::PThreads4W)
             add_library(PThreads4W::PThreads4W SHARED IMPORTED)
