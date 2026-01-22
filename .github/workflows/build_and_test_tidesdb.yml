@@ -86,6 +86,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          # Get Windows-style path for MSYS2 prefix
+          MINGW_PREFIX_WIN=$(cygpath -m /mingw64)
+
           # Create cmake config directory
           mkdir -p /mingw64/lib/cmake/lz4
           mkdir -p /mingw64/lib/cmake/zstd
@@ -93,49 +96,49 @@ jobs:
           mkdir -p /mingw64/lib/cmake/PThreads4W
 
           # Create lz4-config.cmake
-          cat > /mingw64/lib/cmake/lz4/lz4-config.cmake << 'EOF'
+          cat > /mingw64/lib/cmake/lz4/lz4-config.cmake << EOF
           if(NOT TARGET lz4::lz4)
             add_library(lz4::lz4 SHARED IMPORTED)
             set_target_properties(lz4::lz4 PROPERTIES
-              IMPORTED_LOCATION "/mingw64/bin/liblz4.dll"
-              IMPORTED_IMPLIB "/mingw64/lib/liblz4.dll.a"
-              INTERFACE_INCLUDE_DIRECTORIES "/mingw64/include"
+              IMPORTED_LOCATION "${MINGW_PREFIX_WIN}/bin/liblz4.dll"
+              IMPORTED_IMPLIB "${MINGW_PREFIX_WIN}/lib/liblz4.dll.a"
+              INTERFACE_INCLUDE_DIRECTORIES "${MINGW_PREFIX_WIN}/include"
             )
           endif()
           EOF
 
           # Create zstd-config.cmake
-          cat > /mingw64/lib/cmake/zstd/zstd-config.cmake << 'EOF'
+          cat > /mingw64/lib/cmake/zstd/zstd-config.cmake << EOF
           if(NOT TARGET zstd::libzstd_shared)
             add_library(zstd::libzstd_shared SHARED IMPORTED)
             set_target_properties(zstd::libzstd_shared PROPERTIES
-              IMPORTED_LOCATION "/mingw64/bin/libzstd.dll"
-              IMPORTED_IMPLIB "/mingw64/lib/libzstd.dll.a"
-              INTERFACE_INCLUDE_DIRECTORIES "/mingw64/include"
+              IMPORTED_LOCATION "${MINGW_PREFIX_WIN}/bin/libzstd.dll"
+              IMPORTED_IMPLIB "${MINGW_PREFIX_WIN}/lib/libzstd.dll.a"
+              INTERFACE_INCLUDE_DIRECTORIES "${MINGW_PREFIX_WIN}/include"
             )
           endif()
           EOF
 
-          # Create Snappy-config.cmake (note: MSYS2 snappy is named differently)
-          cat > /mingw64/lib/cmake/Snappy/Snappy-config.cmake << 'EOF'
+          # Create Snappy-config.cmake
+          cat > /mingw64/lib/cmake/Snappy/Snappy-config.cmake << EOF
           if(NOT TARGET Snappy::snappy)
             add_library(Snappy::snappy SHARED IMPORTED)
             set_target_properties(Snappy::snappy PROPERTIES
-              IMPORTED_LOCATION "/mingw64/bin/libsnappy.dll"
-              IMPORTED_IMPLIB "/mingw64/lib/libsnappy.dll.a"
-              INTERFACE_INCLUDE_DIRECTORIES "/mingw64/include"
+              IMPORTED_LOCATION "${MINGW_PREFIX_WIN}/bin/libsnappy.dll"
+              IMPORTED_IMPLIB "${MINGW_PREFIX_WIN}/lib/libsnappy.dll.a"
+              INTERFACE_INCLUDE_DIRECTORIES "${MINGW_PREFIX_WIN}/include"
             )
           endif()
           EOF
 
           # Create PThreads4W-config.cmake (MSYS2 uses winpthreads)
-          cat > /mingw64/lib/cmake/PThreads4W/PThreads4W-config.cmake << 'EOF'
+          cat > /mingw64/lib/cmake/PThreads4W/PThreads4W-config.cmake << EOF
           if(NOT TARGET PThreads4W::PThreads4W)
             add_library(PThreads4W::PThreads4W SHARED IMPORTED)
             set_target_properties(PThreads4W::PThreads4W PROPERTIES
-              IMPORTED_LOCATION "/mingw64/bin/libwinpthread-1.dll"
-              IMPORTED_IMPLIB "/mingw64/lib/libpthread.dll.a"
-              INTERFACE_INCLUDE_DIRECTORIES "/mingw64/include"
+              IMPORTED_LOCATION "${MINGW_PREFIX_WIN}/bin/libwinpthread-1.dll"
+              IMPORTED_IMPLIB "${MINGW_PREFIX_WIN}/lib/libpthread.dll.a"
+              INTERFACE_INCLUDE_DIRECTORIES "${MINGW_PREFIX_WIN}/include"
             )
           endif()
           EOF
