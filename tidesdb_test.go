@@ -26,8 +26,15 @@ import (
 	"time"
 )
 
+const testDBPath = "testdb"
+
+func cleanupTestDB(t *testing.T) {
+	os.RemoveAll(testDBPath)
+}
+
 func TestOpenClose(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -49,8 +56,8 @@ func TestOpenClose(t *testing.T) {
 }
 
 func TestCreateDropColumnFamily(t *testing.T) {
-	os.RemoveAll("testdb")
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -83,7 +90,8 @@ func TestCreateDropColumnFamily(t *testing.T) {
 }
 
 func TestListColumnFamilies(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -138,7 +146,8 @@ type TestStruct struct {
 }
 
 func TestTransactionPutGetDelete(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -206,7 +215,6 @@ func TestTransactionPutGetDelete(t *testing.T) {
 	}
 	readTxn.Free()
 
-
 	var ts TestStruct
 	err = gob.NewDecoder(bytes.NewBuffer(gotValue)).Decode(&ts)
 	if err != nil {
@@ -216,7 +224,6 @@ func TestTransactionPutGetDelete(t *testing.T) {
 	if ts.Name != s.Name || ts.Age != s.Age {
 		t.Fatalf("Expected value %v, got %v", s, ts)
 	}
-
 
 	deleteTxn, err := db.BeginTxn()
 	if err != nil {
@@ -247,7 +254,8 @@ func TestTransactionPutGetDelete(t *testing.T) {
 }
 
 func TestTransactionWithTTL(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -330,7 +338,8 @@ func TestTransactionWithTTL(t *testing.T) {
 }
 
 func TestMultiOperationTransaction(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -408,7 +417,8 @@ func TestMultiOperationTransaction(t *testing.T) {
 }
 
 func TestTransactionRollback(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -470,7 +480,8 @@ func TestTransactionRollback(t *testing.T) {
 }
 
 func TestSavepoints(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -563,7 +574,8 @@ func TestSavepoints(t *testing.T) {
 }
 
 func TestIsolationLevels(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -627,7 +639,8 @@ func TestIsolationLevels(t *testing.T) {
 }
 
 func TestIteratorForward(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -728,7 +741,8 @@ func TestIteratorForward(t *testing.T) {
 }
 
 func TestIteratorBackward(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -829,7 +843,8 @@ func TestIteratorBackward(t *testing.T) {
 }
 
 func TestIteratorSeek(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -907,7 +922,8 @@ func TestIteratorSeek(t *testing.T) {
 }
 
 func TestGetStats(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -925,7 +941,7 @@ func TestGetStats(t *testing.T) {
 	defer db.Close()
 
 	cfConfig := DefaultColumnFamilyConfig()
-	cfConfig.WriteBufferSize = 2 * 1024 * 1024 
+	cfConfig.WriteBufferSize = 2 * 1024 * 1024
 	cfConfig.CompressionAlgorithm = LZ4Compression
 	cfConfig.EnableBloomFilter = true
 	cfConfig.BloomFPR = 0.01
@@ -978,7 +994,8 @@ func TestGetStats(t *testing.T) {
 }
 
 func TestCacheStats(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -1011,7 +1028,8 @@ func TestCacheStats(t *testing.T) {
 }
 
 func TestCompaction(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -1049,7 +1067,7 @@ func TestCompaction(t *testing.T) {
 
 		for i := 0; i < 20; i++ {
 			key := []byte(fmt.Sprintf("key%d_%d", batch, i))
-			value := make([]byte, 512) 
+			value := make([]byte, 512)
 			for j := range value {
 				value[j] = byte(i % 256)
 			}
@@ -1089,7 +1107,8 @@ func TestCompaction(t *testing.T) {
 }
 
 func TestFlushMemtable(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -1146,7 +1165,8 @@ func TestFlushMemtable(t *testing.T) {
 }
 
 func TestNonExistentColumnFamily(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -1179,7 +1199,8 @@ func TestNonExistentColumnFamily(t *testing.T) {
 }
 
 func TestSyncModes(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -1237,7 +1258,8 @@ func TestSyncModes(t *testing.T) {
 }
 
 func TestCompressionAlgorithms(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
@@ -1305,7 +1327,8 @@ func TestCompressionAlgorithms(t *testing.T) {
 }
 
 func TestMultiColumnFamilyTransaction(t *testing.T) {
-	defer os.RemoveAll("testdb")
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
 
 	config := Config{
 		DBPath:               "testdb",
