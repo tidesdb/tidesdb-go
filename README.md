@@ -11,7 +11,7 @@ TidesDB is a fast and efficient key-value storage engine library written in C. T
 - Column families aka isolated key-value stores with independent configuration
 - Bidirectional iterators with forward/backward traversal with seek support
 - TTL(time to live) support with automatic key expiration and internal garbage collection
-- LZ4, LZ4 Fast, ZSTD, or no compression
+- LZ4, LZ4 Fast, ZSTD, Snappy, or no compression
 - Bloom filters with configurable false positive rates
 - Global block CLOCK cache for hot blocks
 - Automatic with configurable thread pools (sorted runs, compaction)
