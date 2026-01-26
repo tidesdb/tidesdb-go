@@ -37,10 +37,11 @@ import (
 type CompressionAlgorithm int
 
 const (
-	NoCompression       CompressionAlgorithm = C.NO_COMPRESSION
-	LZ4Compression      CompressionAlgorithm = C.LZ4_COMPRESSION
-	ZstdCompression     CompressionAlgorithm = C.ZSTD_COMPRESSION
-	LZ4FastCompression  CompressionAlgorithm = C.LZ4_FAST_COMRESSION
+	NoCompression      CompressionAlgorithm = C.TDB_COMPRESS_NONE
+	SnappyCompression  CompressionAlgorithm = C.TDB_COMPRESS_SNAPPY
+	LZ4Compression     CompressionAlgorithm = C.TDB_COMPRESS_LZ4
+	ZstdCompression    CompressionAlgorithm = C.TDB_COMPRESS_ZSTD
+	LZ4FastCompression CompressionAlgorithm = C.TDB_COMPRESS_LZ4_FAST
 )
 
 // SyncMode the sync mode for durability.
@@ -153,6 +154,13 @@ type Stats struct {
 	LevelSizes       []uint64
 	LevelNumSSTables []int
 	Config           *ColumnFamilyConfig
+	TotalKeys        uint64
+	TotalDataSize    uint64
+	AvgKeySize       float64
+	AvgValueSize     float64
+	LevelKeyCounts   []uint64
+	ReadAmp          float64
+	HitRate          float64
 }
 
 // CacheStats is statistics about the block cache.
@@ -215,7 +223,7 @@ func DefaultConfig() Config {
 		NumFlushThreads:      2,
 		NumCompactionThreads: 2,
 		LogLevel:             LogInfo,
-		BlockCacheSize:       64 * 1024 * 1024, 
+		BlockCacheSize:       64 * 1024 * 1024,
 		MaxOpenSSTables:      256,
 	}
 }
@@ -229,7 +237,7 @@ func DefaultColumnFamilyConfig() ColumnFamilyConfig {
 		MinLevels:             int(cConfig.min_levels),
 		DividingLevelOffset:   int(cConfig.dividing_level_offset),
 		KlogValueThreshold:    uint64(cConfig.klog_value_threshold),
-		CompressionAlgorithm:  CompressionAlgorithm(cConfig.compression_algo),
+		CompressionAlgorithm:  CompressionAlgorithm(cConfig.compression_algorithm),
 		EnableBloomFilter:     cConfig.enable_bloom_filter != 0,
 		BloomFPR:              float64(cConfig.bloom_fpr),
 		EnableBlockIndexes:    cConfig.enable_block_indexes != 0,
@@ -280,30 +288,40 @@ func (db *TidesDB) Close() error {
 	return errorFromCode(result, "failed to close database")
 }
 
+// Backup creates an on-disk snapshot of an open database without blocking normal reads/writes.
+// The dir parameter must be a non-existent directory or an empty directory.
+func (db *TidesDB) Backup(dir string) error {
+	cDir := C.CString(dir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	result := C.tidesdb_backup(db.db, cDir)
+	return errorFromCode(result, "failed to backup database")
+}
+
 // CreateColumnFamily creates a new column family with the given configuration.
 func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
 	cConfig := C.tidesdb_column_family_config_t{
-		write_buffer_size:       C.size_t(config.WriteBufferSize),
-		level_size_ratio:        C.size_t(config.LevelSizeRatio),
-		min_levels:              C.int(config.MinLevels),
-		dividing_level_offset:   C.int(config.DividingLevelOffset),
-		klog_value_threshold:    C.size_t(config.KlogValueThreshold),
-		compression_algo:        C.compression_algorithm(config.CompressionAlgorithm),
-		enable_bloom_filter:     C.int(0),
-		bloom_fpr:               C.double(config.BloomFPR),
-		enable_block_indexes:    C.int(0),
-		index_sample_ratio:      C.int(config.IndexSampleRatio),
-		block_index_prefix_len:  C.int(config.BlockIndexPrefixLen),
-		sync_mode:               C.int(config.SyncMode),
-		sync_interval_us:        C.uint64_t(config.SyncIntervalUs),
-		skip_list_max_level:     C.int(config.SkipListMaxLevel),
-		skip_list_probability:   C.float(config.SkipListProbability),
-		default_isolation_level: C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
-		min_disk_space:          C.uint64_t(config.MinDiskSpace),
-		l1_file_count_trigger:   C.int(config.L1FileCountTrigger),
+		write_buffer_size:        C.size_t(config.WriteBufferSize),
+		level_size_ratio:         C.size_t(config.LevelSizeRatio),
+		min_levels:               C.int(config.MinLevels),
+		dividing_level_offset:    C.int(config.DividingLevelOffset),
+		klog_value_threshold:     C.size_t(config.KlogValueThreshold),
+		compression_algorithm:    C.compression_algorithm(config.CompressionAlgorithm),
+		enable_bloom_filter:      C.int(0),
+		bloom_fpr:                C.double(config.BloomFPR),
+		enable_block_indexes:     C.int(0),
+		index_sample_ratio:       C.int(config.IndexSampleRatio),
+		block_index_prefix_len:   C.int(config.BlockIndexPrefixLen),
+		sync_mode:                C.int(config.SyncMode),
+		sync_interval_us:         C.uint64_t(config.SyncIntervalUs),
+		skip_list_max_level:      C.int(config.SkipListMaxLevel),
+		skip_list_probability:    C.float(config.SkipListProbability),
+		default_isolation_level:  C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
+		min_disk_space:           C.uint64_t(config.MinDiskSpace),
+		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
 		l0_queue_stall_threshold: C.int(config.L0QueueStallThreshold),
 	}
 
@@ -332,6 +350,18 @@ func (db *TidesDB) DropColumnFamily(name string) error {
 
 	result := C.tidesdb_drop_column_family(db.db, cName)
 	return errorFromCode(result, "failed to drop column family")
+}
+
+// RenameColumnFamily atomically renames a column family and its underlying directory.
+// Waits for any in-progress flush/compaction to complete before renaming.
+func (db *TidesDB) RenameColumnFamily(oldName, newName string) error {
+	cOldName := C.CString(oldName)
+	defer C.free(unsafe.Pointer(cOldName))
+	cNewName := C.CString(newName)
+	defer C.free(unsafe.Pointer(cNewName))
+
+	result := C.tidesdb_rename_column_family(db.db, cOldName, cNewName)
+	return errorFromCode(result, "failed to rename column family")
 }
 
 // GetColumnFamily retrieves a column family by name.
@@ -384,8 +414,14 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 	defer C.tidesdb_free_stats(cStats)
 
 	stats := &Stats{
-		NumLevels:    int(cStats.num_levels),
-		MemtableSize: uint64(cStats.memtable_size),
+		NumLevels:     int(cStats.num_levels),
+		MemtableSize:  uint64(cStats.memtable_size),
+		TotalKeys:     uint64(cStats.total_keys),
+		TotalDataSize: uint64(cStats.total_data_size),
+		AvgKeySize:    float64(cStats.avg_key_size),
+		AvgValueSize:  float64(cStats.avg_value_size),
+		ReadAmp:       float64(cStats.read_amp),
+		HitRate:       float64(cStats.hit_rate),
 	}
 
 	if cStats.num_levels > 0 && cStats.level_sizes != nil {
@@ -404,6 +440,14 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 		}
 	}
 
+	if cStats.num_levels > 0 && cStats.level_key_counts != nil {
+		levelKeyCounts := (*[1 << 30]C.uint64_t)(unsafe.Pointer(cStats.level_key_counts))[:cStats.num_levels:cStats.num_levels]
+		stats.LevelKeyCounts = make([]uint64, cStats.num_levels)
+		for i := 0; i < int(cStats.num_levels); i++ {
+			stats.LevelKeyCounts[i] = uint64(levelKeyCounts[i])
+		}
+	}
+
 	if cStats.config != nil {
 		stats.Config = &ColumnFamilyConfig{
 			WriteBufferSize:       uint64(cStats.config.write_buffer_size),
@@ -411,7 +455,7 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 			MinLevels:             int(cStats.config.min_levels),
 			DividingLevelOffset:   int(cStats.config.dividing_level_offset),
 			KlogValueThreshold:    uint64(cStats.config.klog_value_threshold),
-			CompressionAlgorithm:  CompressionAlgorithm(cStats.config.compression_algo),
+			CompressionAlgorithm:  CompressionAlgorithm(cStats.config.compression_algorithm),
 			EnableBloomFilter:     cStats.config.enable_bloom_filter != 0,
 			BloomFPR:              float64(cStats.config.bloom_fpr),
 			EnableBlockIndexes:    cStats.config.enable_block_indexes != 0,
@@ -461,6 +505,64 @@ func (cf *ColumnFamily) Compact() error {
 func (cf *ColumnFamily) FlushMemtable() error {
 	result := C.tidesdb_flush_memtable(cf.cf)
 	return errorFromCode(result, "failed to flush memtable")
+}
+
+// IsFlushing checks if a column family has a flush operation in progress.
+func (cf *ColumnFamily) IsFlushing() bool {
+	return C.tidesdb_is_flushing(cf.cf) != 0
+}
+
+// IsCompacting checks if a column family has a compaction operation in progress.
+func (cf *ColumnFamily) IsCompacting() bool {
+	return C.tidesdb_is_compacting(cf.cf) != 0
+}
+
+// UpdateRuntimeConfig updates runtime-safe configuration settings for a column family.
+// If persistToDisk is true, changes are saved to config.ini in the column family directory.
+func (cf *ColumnFamily) UpdateRuntimeConfig(config ColumnFamilyConfig, persistToDisk bool) error {
+	cConfig := C.tidesdb_column_family_config_t{
+		write_buffer_size:        C.size_t(config.WriteBufferSize),
+		level_size_ratio:         C.size_t(config.LevelSizeRatio),
+		min_levels:               C.int(config.MinLevels),
+		dividing_level_offset:    C.int(config.DividingLevelOffset),
+		klog_value_threshold:     C.size_t(config.KlogValueThreshold),
+		compression_algorithm:    C.compression_algorithm(config.CompressionAlgorithm),
+		enable_bloom_filter:      C.int(0),
+		bloom_fpr:                C.double(config.BloomFPR),
+		enable_block_indexes:     C.int(0),
+		index_sample_ratio:       C.int(config.IndexSampleRatio),
+		block_index_prefix_len:   C.int(config.BlockIndexPrefixLen),
+		sync_mode:                C.int(config.SyncMode),
+		sync_interval_us:         C.uint64_t(config.SyncIntervalUs),
+		skip_list_max_level:      C.int(config.SkipListMaxLevel),
+		skip_list_probability:    C.float(config.SkipListProbability),
+		default_isolation_level:  C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
+		min_disk_space:           C.uint64_t(config.MinDiskSpace),
+		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
+		l0_queue_stall_threshold: C.int(config.L0QueueStallThreshold),
+	}
+
+	if config.EnableBloomFilter {
+		cConfig.enable_bloom_filter = C.int(1)
+	}
+	if config.EnableBlockIndexes {
+		cConfig.enable_block_indexes = C.int(1)
+	}
+
+	if config.ComparatorName != "" {
+		cCompName := C.CString(config.ComparatorName)
+		defer C.free(unsafe.Pointer(cCompName))
+		C.strncpy(&cConfig.comparator_name[0], cCompName, C.TDB_MAX_COMPARATOR_NAME-1)
+		cConfig.comparator_name[C.TDB_MAX_COMPARATOR_NAME-1] = 0
+	}
+
+	persist := C.int(0)
+	if persistToDisk {
+		persist = C.int(1)
+	}
+
+	result := C.tidesdb_cf_update_runtime_config(cf.cf, &cConfig, persist)
+	return errorFromCode(result, "failed to update runtime config")
 }
 
 // RegisterComparator registers a custom comparator with the database.
