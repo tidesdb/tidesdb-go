@@ -121,6 +121,8 @@ type Config struct {
 	LogLevel             LogLevel
 	BlockCacheSize       uint64
 	MaxOpenSSTables      uint64
+	LogToFile            bool
+	LogTruncationAt      uint64
 }
 
 // ColumnFamilyConfig is the configuration for a column family.
@@ -225,6 +227,8 @@ func DefaultConfig() Config {
 		LogLevel:             LogInfo,
 		BlockCacheSize:       64 * 1024 * 1024,
 		MaxOpenSSTables:      256,
+		LogToFile:            false,
+		LogTruncationAt:      24 * (1024 * 1024),
 	}
 }
 
@@ -267,6 +271,12 @@ func Open(config Config) (*TidesDB, error) {
 		log_level:              C.tidesdb_log_level_t(config.LogLevel),
 		block_cache_size:       C.size_t(config.BlockCacheSize),
 		max_open_sstables:      C.size_t(config.MaxOpenSSTables),
+		log_to_file:            C.int(0),
+		log_truncation_at:      C.size_t(config.LogTruncationAt),
+	}
+
+	if config.LogToFile {
+		cConfig.log_to_file = C.int(1)
 	}
 
 	var db *C.tidesdb_t
