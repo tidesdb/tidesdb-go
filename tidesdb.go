@@ -164,6 +164,10 @@ type Stats struct {
 	LevelKeyCounts   []uint64
 	ReadAmp          float64
 	HitRate          float64
+	UseBtree         bool
+	BtreeTotalNodes  uint64
+	BtreeMaxHeight   uint32
+	BtreeAvgHeight   float64
 }
 
 // CacheStats is statistics about the block cache.
@@ -427,14 +431,18 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 	defer C.tidesdb_free_stats(cStats)
 
 	stats := &Stats{
-		NumLevels:     int(cStats.num_levels),
-		MemtableSize:  uint64(cStats.memtable_size),
-		TotalKeys:     uint64(cStats.total_keys),
-		TotalDataSize: uint64(cStats.total_data_size),
-		AvgKeySize:    float64(cStats.avg_key_size),
-		AvgValueSize:  float64(cStats.avg_value_size),
-		ReadAmp:       float64(cStats.read_amp),
-		HitRate:       float64(cStats.hit_rate),
+		NumLevels:       int(cStats.num_levels),
+		MemtableSize:    uint64(cStats.memtable_size),
+		TotalKeys:       uint64(cStats.total_keys),
+		TotalDataSize:   uint64(cStats.total_data_size),
+		AvgKeySize:      float64(cStats.avg_key_size),
+		AvgValueSize:    float64(cStats.avg_value_size),
+		ReadAmp:         float64(cStats.read_amp),
+		HitRate:         float64(cStats.hit_rate),
+		UseBtree:        cStats.use_btree != 0,
+		BtreeTotalNodes: uint64(cStats.btree_total_nodes),
+		BtreeMaxHeight:  uint32(cStats.btree_max_height),
+		BtreeAvgHeight:  float64(cStats.btree_avg_height),
 	}
 
 	if cStats.num_levels > 0 && cStats.level_sizes != nil {
@@ -483,7 +491,7 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 			MinDiskSpace:          uint64(cStats.config.min_disk_space),
 			L1FileCountTrigger:    int(cStats.config.l1_file_count_trigger),
 			L0QueueStallThreshold: int(cStats.config.l0_queue_stall_threshold),
-			UseBtree:              int(cStats.use_btree),
+			UseBtree:              int(cStats.config.use_btree),
 		}
 	}
 
