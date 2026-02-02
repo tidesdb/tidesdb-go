@@ -147,6 +147,7 @@ type ColumnFamilyConfig struct {
 	MinDiskSpace          uint64
 	L1FileCountTrigger    int
 	L0QueueStallThreshold int
+	UseBtree              int
 }
 
 // Stats is statistics about a column family.
@@ -256,6 +257,7 @@ func DefaultColumnFamilyConfig() ColumnFamilyConfig {
 		MinDiskSpace:          uint64(cConfig.min_disk_space),
 		L1FileCountTrigger:    int(cConfig.l1_file_count_trigger),
 		L0QueueStallThreshold: int(cConfig.l0_queue_stall_threshold),
+		UseBtree:              int(cConfig.use_btree),
 	}
 }
 
@@ -333,6 +335,7 @@ func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) er
 		min_disk_space:           C.uint64_t(config.MinDiskSpace),
 		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
 		l0_queue_stall_threshold: C.int(config.L0QueueStallThreshold),
+		use_btree:                C.int(config.UseBtree),
 	}
 
 	if config.EnableBloomFilter {
@@ -480,6 +483,7 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 			MinDiskSpace:          uint64(cStats.config.min_disk_space),
 			L1FileCountTrigger:    int(cStats.config.l1_file_count_trigger),
 			L0QueueStallThreshold: int(cStats.config.l0_queue_stall_threshold),
+			UseBtree:              int(cStats.use_btree),
 		}
 	}
 
@@ -550,6 +554,7 @@ func (cf *ColumnFamily) UpdateRuntimeConfig(config ColumnFamilyConfig, persistTo
 		min_disk_space:           C.uint64_t(config.MinDiskSpace),
 		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
 		l0_queue_stall_threshold: C.int(config.L0QueueStallThreshold),
+		use_btree:                C.int(config.UseBtree),
 	}
 
 	if config.EnableBloomFilter {
