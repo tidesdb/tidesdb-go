@@ -1413,3 +1413,144 @@ func TestMultiColumnFamilyTransaction(t *testing.T) {
 
 	t.Logf("Multi-CF transaction completed successfully")
 }
+
+func TestBtreeColumnFamily(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create column family with B+tree format enabled
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.UseBtree = 1
+	cfConfig.WriteBufferSize = 1024 // Small buffer to force flushes
+	cfConfig.CompressionAlgorithm = LZ4Compression
+	cfConfig.EnableBloomFilter = true
+	cfConfig.BloomFPR = 0.01
+
+	err = db.CreateColumnFamily("btree_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create B+tree column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("btree_cf")
+	if err != nil {
+		t.Fatalf("Failed to get B+tree column family: %v", err)
+	}
+
+	// Insert data to populate the B+tree
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("btree_key_%04d", i))
+		value := []byte(fmt.Sprintf("btree_value_%04d_with_extra_data", i))
+		err = txn.Put(cf, key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Force flush to create SSTable with B+tree structure
+	err = cf.FlushMemtable()
+	if err != nil {
+		t.Logf("Flush memtable note: %v", err)
+	}
+
+	// Wait briefly for flush to complete
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify data can be read back
+	readTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin read transaction: %v", err)
+	}
+	defer readTxn.Free()
+
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("btree_key_%04d", i))
+		expectedValue := []byte(fmt.Sprintf("btree_value_%04d_with_extra_data", i))
+
+		value, err := readTxn.Get(cf, key)
+		if err != nil {
+			t.Fatalf("Failed to get key %s: %v", string(key), err)
+		}
+
+		if !bytes.Equal(value, expectedValue) {
+			t.Fatalf("Expected value %s, got %s", string(expectedValue), string(value))
+		}
+	}
+
+	// Get stats and verify B+tree fields
+	stats, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("Failed to get stats: %v", err)
+	}
+
+	t.Logf("B+tree column family stats:")
+	t.Logf("  UseBtree: %v", stats.UseBtree)
+	t.Logf("  BtreeTotalNodes: %d", stats.BtreeTotalNodes)
+	t.Logf("  BtreeMaxHeight: %d", stats.BtreeMaxHeight)
+	t.Logf("  BtreeAvgHeight: %.2f", stats.BtreeAvgHeight)
+	t.Logf("  NumLevels: %d", stats.NumLevels)
+	t.Logf("  TotalKeys: %d", stats.TotalKeys)
+	t.Logf("  MemtableSize: %d bytes", stats.MemtableSize)
+
+	// Verify UseBtree is true
+	if !stats.UseBtree {
+		t.Errorf("Expected UseBtree to be true for B+tree column family")
+	}
+
+	// Verify config also reflects B+tree setting
+	if stats.Config != nil {
+		if stats.Config.UseBtree != 1 {
+			t.Errorf("Expected Config.UseBtree to be 1, got %d", stats.Config.UseBtree)
+		}
+		t.Logf("  Config.UseBtree: %d", stats.Config.UseBtree)
+	}
+
+	// Test iterator with B+tree format
+	iter, err := readTxn.NewIterator(cf)
+	if err != nil {
+		t.Fatalf("Failed to create iterator: %v", err)
+	}
+	defer iter.Free()
+
+	err = iter.SeekToFirst()
+	if err != nil {
+		t.Fatalf("Failed to seek to first: %v", err)
+	}
+
+	count := 0
+	for iter.Valid() {
+		count++
+		iter.Next()
+	}
+
+	if count != 100 {
+		t.Errorf("Expected to iterate over 100 entries, got %d", count)
+	}
+
+	t.Logf("B+tree column family test completed successfully with %d entries", count)
+}
