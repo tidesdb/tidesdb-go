@@ -381,6 +381,19 @@ func (db *TidesDB) RenameColumnFamily(oldName, newName string) error {
 	return errorFromCode(result, "failed to rename column family")
 }
 
+// CloneColumnFamily creates a complete copy of an existing column family with a new name.
+// The clone contains all the data from the source at the time of cloning.
+// Both column families exist independently after cloning.
+func (db *TidesDB) CloneColumnFamily(sourceName, destName string) error {
+	cSourceName := C.CString(sourceName)
+	defer C.free(unsafe.Pointer(cSourceName))
+	cDestName := C.CString(destName)
+	defer C.free(unsafe.Pointer(cDestName))
+
+	result := C.tidesdb_clone_column_family(db.db, cSourceName, cDestName)
+	return errorFromCode(result, "failed to clone column family")
+}
+
 // GetColumnFamily retrieves a column family by name.
 func (db *TidesDB) GetColumnFamily(name string) (*ColumnFamily, error) {
 	cName := C.CString(name)
@@ -687,6 +700,14 @@ func (txn *Transaction) Free() {
 		C.tidesdb_txn_free(txn.txn)
 		txn.txn = nil
 	}
+}
+
+// Reset resets a committed or aborted transaction for reuse with a new isolation level.
+// This avoids the overhead of freeing and reallocating transaction resources in hot loops.
+// The transaction must be committed or aborted before reset; resetting an active transaction returns an error.
+func (txn *Transaction) Reset(isolation IsolationLevel) error {
+	result := C.tidesdb_txn_reset(txn.txn, C.tidesdb_isolation_level_t(isolation))
+	return errorFromCode(result, "failed to reset transaction")
 }
 
 // Savepoint creates a savepoint within the transaction.

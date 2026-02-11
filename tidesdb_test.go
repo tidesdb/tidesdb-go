@@ -1554,3 +1554,347 @@ func TestBtreeColumnFamily(t *testing.T) {
 
 	t.Logf("B+tree column family test completed successfully with %d entries", count)
 }
+
+func TestCloneColumnFamily(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create source column family with data
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.CompressionAlgorithm = LZ4Compression
+	cfConfig.EnableBloomFilter = true
+
+	err = db.CreateColumnFamily("source_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create source column family: %v", err)
+	}
+
+	sourceCF, err := db.GetColumnFamily("source_cf")
+	if err != nil {
+		t.Fatalf("Failed to get source column family: %v", err)
+	}
+
+	// Insert data into source
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	testData := map[string]string{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": "value3",
+	}
+
+	for k, v := range testData {
+		err = txn.Put(sourceCF, []byte(k), []byte(v), -1)
+		if err != nil {
+			t.Fatalf("Failed to put %s: %v", k, err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Clone the column family
+	err = db.CloneColumnFamily("source_cf", "cloned_cf")
+	if err != nil {
+		t.Fatalf("Failed to clone column family: %v", err)
+	}
+
+	// Verify both column families exist
+	cfList, err := db.ListColumnFamilies()
+	if err != nil {
+		t.Fatalf("Failed to list column families: %v", err)
+	}
+
+	foundSource := false
+	foundClone := false
+	for _, name := range cfList {
+		if name == "source_cf" {
+			foundSource = true
+		}
+		if name == "cloned_cf" {
+			foundClone = true
+		}
+	}
+
+	if !foundSource {
+		t.Fatalf("Source column family not found after clone")
+	}
+	if !foundClone {
+		t.Fatalf("Cloned column family not found")
+	}
+
+	// Verify cloned data
+	clonedCF, err := db.GetColumnFamily("cloned_cf")
+	if err != nil {
+		t.Fatalf("Failed to get cloned column family: %v", err)
+	}
+
+	verifyTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin verify transaction: %v", err)
+	}
+	defer verifyTxn.Free()
+
+	for k, expectedV := range testData {
+		value, err := verifyTxn.Get(clonedCF, []byte(k))
+		if err != nil {
+			t.Fatalf("Failed to get %s from cloned CF: %v", k, err)
+		}
+		if string(value) != expectedV {
+			t.Fatalf("Expected value %s for key %s in clone, got %s", expectedV, k, value)
+		}
+	}
+
+	// Verify independence: modify clone, source should be unchanged
+	modifyTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin modify transaction: %v", err)
+	}
+
+	err = modifyTxn.Put(clonedCF, []byte("key4"), []byte("value4"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key4 in clone: %v", err)
+	}
+
+	err = modifyTxn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit modify transaction: %v", err)
+	}
+	modifyTxn.Free()
+
+	// Verify key4 exists in clone but not in source
+	checkTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin check transaction: %v", err)
+	}
+	defer checkTxn.Free()
+
+	_, err = checkTxn.Get(clonedCF, []byte("key4"))
+	if err != nil {
+		t.Fatalf("key4 should exist in cloned CF: %v", err)
+	}
+
+	_, err = checkTxn.Get(sourceCF, []byte("key4"))
+	if err == nil {
+		t.Fatalf("key4 should NOT exist in source CF (clone should be independent)")
+	}
+
+	t.Logf("Clone column family test completed successfully")
+}
+
+func TestTransactionReset(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Begin transaction and do first batch of work
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key1: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit first transaction: %v", err)
+	}
+
+	// Reset transaction instead of free + begin
+	err = txn.Reset(IsolationReadCommitted)
+	if err != nil {
+		t.Fatalf("Failed to reset transaction: %v", err)
+	}
+
+	// Second batch of work using the same transaction
+	err = txn.Put(cf, []byte("key2"), []byte("value2"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key2 after reset: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit second transaction: %v", err)
+	}
+
+	// Reset again with different isolation level
+	err = txn.Reset(IsolationRepeatableRead)
+	if err != nil {
+		t.Fatalf("Failed to reset transaction with different isolation: %v", err)
+	}
+
+	// Third batch of work
+	err = txn.Put(cf, []byte("key3"), []byte("value3"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key3 after second reset: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit third transaction: %v", err)
+	}
+
+	// Free once when done
+	txn.Free()
+
+	// Verify all keys exist
+	verifyTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin verify transaction: %v", err)
+	}
+	defer verifyTxn.Free()
+
+	for i := 1; i <= 3; i++ {
+		key := []byte(fmt.Sprintf("key%d", i))
+		expectedValue := []byte(fmt.Sprintf("value%d", i))
+
+		value, err := verifyTxn.Get(cf, key)
+		if err != nil {
+			t.Fatalf("Failed to get key%d: %v", i, err)
+		}
+
+		if !bytes.Equal(value, expectedValue) {
+			t.Fatalf("Expected value %s for key%d, got %s", expectedValue, i, value)
+		}
+	}
+
+	t.Logf("Transaction reset test completed successfully")
+}
+
+func TestTransactionResetAfterRollback(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Begin transaction and rollback
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("rollback_key"), []byte("rollback_value"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put rollback_key: %v", err)
+	}
+
+	err = txn.Rollback()
+	if err != nil {
+		t.Fatalf("Failed to rollback transaction: %v", err)
+	}
+
+	// Reset after rollback should work
+	err = txn.Reset(IsolationReadCommitted)
+	if err != nil {
+		t.Fatalf("Failed to reset transaction after rollback: %v", err)
+	}
+
+	// Use reset transaction
+	err = txn.Put(cf, []byte("after_reset_key"), []byte("after_reset_value"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put after_reset_key: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit after reset: %v", err)
+	}
+
+	txn.Free()
+
+	// Verify rollback_key does not exist, after_reset_key exists
+	verifyTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin verify transaction: %v", err)
+	}
+	defer verifyTxn.Free()
+
+	_, err = verifyTxn.Get(cf, []byte("rollback_key"))
+	if err == nil {
+		t.Fatalf("rollback_key should not exist")
+	}
+
+	value, err := verifyTxn.Get(cf, []byte("after_reset_key"))
+	if err != nil {
+		t.Fatalf("Failed to get after_reset_key: %v", err)
+	}
+
+	if string(value) != "after_reset_value" {
+		t.Fatalf("Expected 'after_reset_value', got '%s'", string(value))
+	}
+
+	t.Logf("Transaction reset after rollback test completed successfully")
+}
