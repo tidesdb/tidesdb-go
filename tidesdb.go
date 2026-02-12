@@ -314,6 +314,17 @@ func (db *TidesDB) Backup(dir string) error {
 	return errorFromCode(result, "failed to backup database")
 }
 
+// Checkpoint creates a lightweight, near-instant snapshot of an open database using hard links
+// instead of copying SSTable data. The checkpointDir parameter must be a non-existent directory
+// or an empty directory. The checkpoint can be opened as a normal TidesDB database.
+func (db *TidesDB) Checkpoint(checkpointDir string) error {
+	cDir := C.CString(checkpointDir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	result := C.tidesdb_checkpoint(db.db, cDir)
+	return errorFromCode(result, "failed to checkpoint database")
+}
+
 // CreateColumnFamily creates a new column family with the given configuration.
 func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) error {
 	cName := C.CString(name)

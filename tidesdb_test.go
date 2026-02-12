@@ -1898,3 +1898,124 @@ func TestTransactionResetAfterRollback(t *testing.T) {
 
 	t.Logf("Transaction reset after rollback test completed successfully")
 }
+
+func TestCheckpoint(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	checkpointDir := "testdb_checkpoint"
+	os.RemoveAll(checkpointDir)
+	defer os.RemoveAll(checkpointDir)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write some data
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("checkpoint_key_%d", i))
+		value := []byte(fmt.Sprintf("checkpoint_value_%d", i))
+		err = txn.Put(cf, key, value, -1)
+		if err != nil {
+			txn.Rollback()
+			t.Fatalf("Failed to put key: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Create checkpoint
+	err = db.Checkpoint(checkpointDir)
+	if err != nil {
+		t.Fatalf("Failed to create checkpoint: %v", err)
+	}
+
+	t.Logf("Checkpoint created successfully at %s", checkpointDir)
+
+	// Verify checkpoint directory exists
+	if _, err := os.Stat(checkpointDir); os.IsNotExist(err) {
+		t.Fatalf("Checkpoint directory does not exist")
+	}
+
+	db.Close()
+
+	// Open the checkpoint as a database and verify data
+	checkpointConfig := Config{
+		DBPath:               checkpointDir,
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	checkpointDB, err := Open(checkpointConfig)
+	if err != nil {
+		t.Fatalf("Failed to open checkpoint database: %v", err)
+	}
+	defer checkpointDB.Close()
+
+	checkpointCF, err := checkpointDB.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family from checkpoint: %v", err)
+	}
+
+	// Verify data in checkpoint
+	readTxn, err := checkpointDB.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin read transaction on checkpoint: %v", err)
+	}
+	defer readTxn.Free()
+
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("checkpoint_key_%d", i))
+		expectedValue := fmt.Sprintf("checkpoint_value_%d", i)
+
+		value, err := readTxn.Get(checkpointCF, key)
+		if err != nil {
+			t.Fatalf("Failed to get key %s from checkpoint: %v", key, err)
+		}
+
+		if string(value) != expectedValue {
+			t.Fatalf("Expected '%s', got '%s'", expectedValue, string(value))
+		}
+	}
+
+	// Verify checkpoint to existing directory fails
+	err = checkpointDB.Checkpoint(checkpointDir)
+	if err == nil {
+		t.Fatalf("Expected error when checkpointing to existing non-empty directory")
+	}
+
+	t.Logf("Checkpoint test completed successfully")
+}
