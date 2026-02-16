@@ -127,6 +127,7 @@ type Config struct {
 
 // ColumnFamilyConfig is the configuration for a column family.
 type ColumnFamilyConfig struct {
+	Name                  string
 	WriteBufferSize       uint64
 	LevelSizeRatio        uint64
 	MinLevels             int
@@ -330,7 +331,16 @@ func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) er
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	cConfig := C.tidesdb_column_family_config_t{
+	var cConfig C.tidesdb_column_family_config_t
+
+	// Copy name into the fixed-size array
+	nameBytes := []byte(name)
+	for i := 0; i < len(nameBytes) && i < 127; i++ {
+		cConfig.name[i] = C.char(nameBytes[i])
+	}
+
+	cConfig = C.tidesdb_column_family_config_t{
+		name:                     cConfig.name,
 		write_buffer_size:        C.size_t(config.WriteBufferSize),
 		level_size_ratio:         C.size_t(config.LevelSizeRatio),
 		min_levels:               C.int(config.MinLevels),
