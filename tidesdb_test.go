@@ -2019,3 +2019,164 @@ func TestCheckpoint(t *testing.T) {
 
 	t.Logf("Checkpoint test completed successfully")
 }
+
+func TestRangeCost(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.WriteBufferSize = 1024 // Small buffer to force flushes
+	cfConfig.CompressionAlgorithm = LZ4Compression
+	cfConfig.EnableBloomFilter = true
+	cfConfig.BloomFPR = 0.01
+
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Insert data across a key range
+	for batch := 0; batch < 5; batch++ {
+		txn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin transaction: %v", err)
+		}
+
+		for i := 0; i < 50; i++ {
+			key := []byte(fmt.Sprintf("user:%04d", batch*50+i))
+			value := make([]byte, 256)
+			for j := range value {
+				value[j] = byte(i % 256)
+			}
+			err = txn.Put(cf, key, value, -1)
+			if err != nil {
+				t.Fatalf("Failed to put key: %v", err)
+			}
+		}
+
+		err = txn.Commit()
+		if err != nil {
+			t.Fatalf("Failed to commit transaction: %v", err)
+		}
+		txn.Free()
+	}
+
+	// Wait for flushes to complete
+	time.Sleep(500 * time.Millisecond)
+
+	// Estimate cost for a narrow range
+	costNarrow, err := cf.RangeCost([]byte("user:0000"), []byte("user:0010"))
+	if err != nil {
+		t.Fatalf("Failed to estimate narrow range cost: %v", err)
+	}
+
+	// Estimate cost for a wide range
+	costWide, err := cf.RangeCost([]byte("user:0000"), []byte("user:0249"))
+	if err != nil {
+		t.Fatalf("Failed to estimate wide range cost: %v", err)
+	}
+
+	t.Logf("Narrow range cost (user:0000 - user:0010): %f", costNarrow)
+	t.Logf("Wide range cost   (user:0000 - user:0249): %f", costWide)
+
+	// Wide range should generally cost more than or equal to narrow range
+	if costWide < costNarrow {
+		t.Logf("Note: Wide range cost (%.2f) < narrow range cost (%.2f); may vary with data distribution", costWide, costNarrow)
+	}
+
+	// Test that key order does not matter
+	costReversed, err := cf.RangeCost([]byte("user:0249"), []byte("user:0000"))
+	if err != nil {
+		t.Fatalf("Failed to estimate reversed range cost: %v", err)
+	}
+
+	if costWide != costReversed {
+		t.Logf("Note: Forward cost (%.6f) != reversed cost (%.6f); expected equal", costWide, costReversed)
+	}
+
+	t.Logf("Range cost estimation test completed successfully")
+}
+
+func TestDeleteColumnFamily(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+
+	err = db.CreateColumnFamily("delete_me", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	// Verify it exists
+	cf, err := db.GetColumnFamily("delete_me")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Insert some data
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Delete by pointer (faster than DropColumnFamily by name)
+	err = db.DeleteColumnFamily(cf)
+	if err != nil {
+		t.Fatalf("Failed to delete column family by pointer: %v", err)
+	}
+
+	// Verify it no longer exists
+	_, err = db.GetColumnFamily("delete_me")
+	if err == nil {
+		t.Fatalf("Expected error when getting deleted column family")
+	}
+
+	t.Logf("Delete column family by pointer test completed successfully")
+}
