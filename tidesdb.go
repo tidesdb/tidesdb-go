@@ -415,6 +415,14 @@ func (db *TidesDB) CloneColumnFamily(sourceName, destName string) error {
 	return errorFromCode(result, "failed to clone column family")
 }
 
+// DeleteColumnFamily drops a column family by pointer.
+// This is faster than DropColumnFamily when you already hold the ColumnFamily pointer,
+// as it skips the internal name lookup.
+func (db *TidesDB) DeleteColumnFamily(cf *ColumnFamily) error {
+	result := C.tidesdb_delete_column_family(db.db, cf.cf)
+	return errorFromCode(result, "failed to delete column family")
+}
+
 // GetColumnFamily retrieves a column family by name.
 func (db *TidesDB) GetColumnFamily(name string) (*ColumnFamily, error) {
 	cName := C.CString(name)
@@ -549,6 +557,28 @@ func (db *TidesDB) GetCacheStats() (*CacheStats, error) {
 		HitRate:       float64(cStats.hit_rate),
 		NumPartitions: uint64(cStats.num_partitions),
 	}, nil
+}
+
+// RangeCost estimates the computational cost of iterating between two keys in a column family.
+// The returned value is an opaque double — meaningful only for comparison with other values
+// from the same function. It uses only in-memory metadata and performs no disk I/O.
+// Key order does not matter — the function normalizes the range internally.
+func (cf *ColumnFamily) RangeCost(keyA, keyB []byte) (float64, error) {
+	var cKeyA, cKeyB *C.uint8_t
+	if len(keyA) > 0 {
+		cKeyA = (*C.uint8_t)(unsafe.Pointer(&keyA[0]))
+	}
+	if len(keyB) > 0 {
+		cKeyB = (*C.uint8_t)(unsafe.Pointer(&keyB[0]))
+	}
+
+	var cost C.double
+	result := C.tidesdb_range_cost(cf.cf, cKeyA, C.size_t(len(keyA)), cKeyB, C.size_t(len(keyB)), &cost)
+	if result != C.TDB_SUCCESS {
+		return 0, errorFromCode(result, "failed to estimate range cost")
+	}
+
+	return float64(cost), nil
 }
 
 // Compact manually triggers compaction for a column family.
