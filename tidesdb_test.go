@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -2179,4 +2180,343 @@ func TestDeleteColumnFamily(t *testing.T) {
 	}
 
 	t.Logf("Delete column family by pointer test completed successfully")
+}
+
+func TestCommitHook(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("hook_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("hook_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Collect commit operations via the hook
+	var mu sync.Mutex
+	var capturedOps []CommitOp
+	var capturedSeqs []uint64
+
+	err = cf.SetCommitHook(func(ops []CommitOp, commitSeq uint64) int {
+		mu.Lock()
+		defer mu.Unlock()
+		capturedOps = append(capturedOps, ops...)
+		capturedSeqs = append(capturedSeqs, commitSeq)
+		return 0
+	})
+	if err != nil {
+		t.Fatalf("Failed to set commit hook: %v", err)
+	}
+
+	// Put some data
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key1: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("key2"), []byte("value2"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key2: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Verify hook captured the put operations
+	mu.Lock()
+	if len(capturedOps) != 2 {
+		t.Fatalf("Expected 2 captured ops, got %d", len(capturedOps))
+	}
+
+	for _, op := range capturedOps {
+		if op.IsDelete {
+			t.Fatalf("Expected put operation, got delete")
+		}
+		t.Logf("Captured put: key=%s value=%s", string(op.Key), string(op.Value))
+	}
+
+	if len(capturedSeqs) != 1 {
+		t.Fatalf("Expected 1 commit sequence, got %d", len(capturedSeqs))
+	}
+	firstSeq := capturedSeqs[0]
+	t.Logf("First commit sequence: %d", firstSeq)
+	mu.Unlock()
+
+	// Delete a key and verify the hook captures it
+	txn2, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin delete transaction: %v", err)
+	}
+
+	err = txn2.Delete(cf, []byte("key1"))
+	if err != nil {
+		t.Fatalf("Failed to delete key1: %v", err)
+	}
+
+	err = txn2.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit delete transaction: %v", err)
+	}
+	txn2.Free()
+
+	mu.Lock()
+	if len(capturedOps) != 3 {
+		t.Fatalf("Expected 3 captured ops after delete, got %d", len(capturedOps))
+	}
+
+	lastOp := capturedOps[2]
+	if !lastOp.IsDelete {
+		t.Fatalf("Expected delete operation")
+	}
+	if string(lastOp.Key) != "key1" {
+		t.Fatalf("Expected deleted key 'key1', got '%s'", string(lastOp.Key))
+	}
+	if lastOp.Value != nil {
+		t.Fatalf("Expected nil value for delete, got %v", lastOp.Value)
+	}
+
+	// Verify commit sequence is monotonically increasing
+	if len(capturedSeqs) != 2 {
+		t.Fatalf("Expected 2 commit sequences, got %d", len(capturedSeqs))
+	}
+	if capturedSeqs[1] <= capturedSeqs[0] {
+		t.Fatalf("Expected monotonically increasing commit_seq: %d <= %d", capturedSeqs[1], capturedSeqs[0])
+	}
+	t.Logf("Second commit sequence: %d (monotonically increasing: OK)", capturedSeqs[1])
+	mu.Unlock()
+
+	t.Logf("Commit hook test completed successfully")
+}
+
+func TestCommitHookReplace(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("hook_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("hook_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Set first hook
+	var hook1Count int
+	var mu sync.Mutex
+
+	err = cf.SetCommitHook(func(ops []CommitOp, commitSeq uint64) int {
+		mu.Lock()
+		hook1Count++
+		mu.Unlock()
+		return 0
+	})
+	if err != nil {
+		t.Fatalf("Failed to set first commit hook: %v", err)
+	}
+
+	// Trigger first hook
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	err = txn.Put(cf, []byte("k1"), []byte("v1"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put: %v", err)
+	}
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+	txn.Free()
+
+	mu.Lock()
+	if hook1Count != 1 {
+		t.Fatalf("Expected hook1 called 1 time, got %d", hook1Count)
+	}
+	mu.Unlock()
+
+	// Replace with second hook
+	var hook2Count int
+
+	err = cf.SetCommitHook(func(ops []CommitOp, commitSeq uint64) int {
+		mu.Lock()
+		hook2Count++
+		mu.Unlock()
+		return 0
+	})
+	if err != nil {
+		t.Fatalf("Failed to set second commit hook: %v", err)
+	}
+
+	// Trigger second hook
+	txn2, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	err = txn2.Put(cf, []byte("k2"), []byte("v2"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put: %v", err)
+	}
+	err = txn2.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+	txn2.Free()
+
+	mu.Lock()
+	if hook1Count != 1 {
+		t.Fatalf("Expected hook1 still called 1 time after replacement, got %d", hook1Count)
+	}
+	if hook2Count != 1 {
+		t.Fatalf("Expected hook2 called 1 time, got %d", hook2Count)
+	}
+	mu.Unlock()
+
+	t.Logf("Commit hook replacement test completed successfully")
+}
+
+func TestCommitHookClear(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("hook_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("hook_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	var hookCount int
+	var mu sync.Mutex
+
+	err = cf.SetCommitHook(func(ops []CommitOp, commitSeq uint64) int {
+		mu.Lock()
+		hookCount++
+		mu.Unlock()
+		return 0
+	})
+	if err != nil {
+		t.Fatalf("Failed to set commit hook: %v", err)
+	}
+
+	// Trigger hook
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	err = txn.Put(cf, []byte("k1"), []byte("v1"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put: %v", err)
+	}
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+	txn.Free()
+
+	mu.Lock()
+	if hookCount != 1 {
+		t.Fatalf("Expected hook called 1 time, got %d", hookCount)
+	}
+	mu.Unlock()
+
+	// Clear the hook
+	err = cf.ClearCommitHook()
+	if err != nil {
+		t.Fatalf("Failed to clear commit hook: %v", err)
+	}
+
+	// Commit again — hook should NOT fire
+	txn2, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	err = txn2.Put(cf, []byte("k2"), []byte("v2"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put: %v", err)
+	}
+	err = txn2.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+	txn2.Free()
+
+	mu.Lock()
+	if hookCount != 1 {
+		t.Fatalf("Expected hook still called 1 time after clear, got %d", hookCount)
+	}
+	mu.Unlock()
+
+	// SetCommitHook with nil should also clear
+	err = cf.SetCommitHook(nil)
+	if err != nil {
+		t.Fatalf("Failed to set nil commit hook: %v", err)
+	}
+
+	t.Logf("Commit hook clear test completed successfully")
 }
