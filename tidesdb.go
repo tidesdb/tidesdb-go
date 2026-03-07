@@ -121,6 +121,7 @@ type Config struct {
 	LogLevel             LogLevel
 	BlockCacheSize       uint64
 	MaxOpenSSTables      uint64
+	MaxMemoryUsage       uint64
 	LogToFile            bool
 	LogTruncationAt      uint64
 }
@@ -233,6 +234,7 @@ func DefaultConfig() Config {
 		LogLevel:             LogInfo,
 		BlockCacheSize:       64 * 1024 * 1024,
 		MaxOpenSSTables:      256,
+		MaxMemoryUsage:       0,
 		LogToFile:            false,
 		LogTruncationAt:      24 * (1024 * 1024),
 	}
@@ -278,6 +280,7 @@ func Open(config Config) (*TidesDB, error) {
 		log_level:              C.tidesdb_log_level_t(config.LogLevel),
 		block_cache_size:       C.size_t(config.BlockCacheSize),
 		max_open_sstables:      C.size_t(config.MaxOpenSSTables),
+		max_memory_usage:       C.size_t(config.MaxMemoryUsage),
 		log_to_file:            C.int(0),
 		log_truncation_at:      C.size_t(config.LogTruncationAt),
 	}
@@ -665,6 +668,23 @@ func (db *TidesDB) RegisterComparator(name string, ctxStr string) error {
 
 	result := C.tidesdb_register_comparator(db.db, cName, nil, cCtxStr, nil)
 	return errorFromCode(result, "failed to register comparator")
+}
+
+// GetComparator retrieves a registered comparator by name.
+// Returns true if the comparator is registered, false otherwise.
+func (db *TidesDB) GetComparator(name string) (bool, error) {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	var fn C.tidesdb_comparator_fn
+	var ctx unsafe.Pointer
+
+	result := C.tidesdb_get_comparator(db.db, cName, &fn, &ctx)
+	if result != C.TDB_SUCCESS {
+		return false, errorFromCode(result, "failed to get comparator")
+	}
+
+	return true, nil
 }
 
 // BeginTxn begins a new transaction with default isolation level.

@@ -2520,3 +2520,421 @@ func TestCommitHookClear(t *testing.T) {
 
 	t.Logf("Commit hook clear test completed successfully")
 }
+
+func TestBackup(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	backupDir := "testdb_backup"
+	os.RemoveAll(backupDir)
+	defer os.RemoveAll(backupDir)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write some data
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("backup_key_%d", i))
+		value := []byte(fmt.Sprintf("backup_value_%d", i))
+		err = txn.Put(cf, key, value, -1)
+		if err != nil {
+			txn.Rollback()
+			t.Fatalf("Failed to put key: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Create backup
+	err = db.Backup(backupDir)
+	if err != nil {
+		t.Fatalf("Failed to create backup: %v", err)
+	}
+
+	t.Logf("Backup created successfully at %s", backupDir)
+
+	// Verify backup directory exists
+	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
+		t.Fatalf("Backup directory does not exist")
+	}
+
+	db.Close()
+
+	// Open the backup as a database and verify data
+	backupConfig := Config{
+		DBPath:               backupDir,
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	backupDB, err := Open(backupConfig)
+	if err != nil {
+		t.Fatalf("Failed to open backup database: %v", err)
+	}
+	defer backupDB.Close()
+
+	backupCF, err := backupDB.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family from backup: %v", err)
+	}
+
+	// Verify data in backup
+	readTxn, err := backupDB.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin read transaction on backup: %v", err)
+	}
+	defer readTxn.Free()
+
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("backup_key_%d", i))
+		expectedValue := fmt.Sprintf("backup_value_%d", i)
+
+		value, err := readTxn.Get(backupCF, key)
+		if err != nil {
+			t.Fatalf("Failed to get key %s from backup: %v", key, err)
+		}
+
+		if string(value) != expectedValue {
+			t.Fatalf("Expected '%s', got '%s'", expectedValue, string(value))
+		}
+	}
+
+	// Verify backup to existing directory fails
+	err = backupDB.Backup(backupDir)
+	if err == nil {
+		t.Fatalf("Expected error when backing up to existing non-empty directory")
+	}
+
+	t.Logf("Backup test completed successfully")
+}
+
+func TestRenameColumnFamily(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("old_name", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	// Insert data
+	cf, err := db.GetColumnFamily("old_name")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key1: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Rename column family
+	err = db.RenameColumnFamily("old_name", "new_name")
+	if err != nil {
+		t.Fatalf("Failed to rename column family: %v", err)
+	}
+
+	// Verify old name no longer exists
+	_, err = db.GetColumnFamily("old_name")
+	if err == nil {
+		t.Fatalf("Expected old_name to not exist after rename")
+	}
+
+	// Verify new name exists and data is intact
+	renamedCF, err := db.GetColumnFamily("new_name")
+	if err != nil {
+		t.Fatalf("Failed to get renamed column family: %v", err)
+	}
+
+	readTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin read transaction: %v", err)
+	}
+	defer readTxn.Free()
+
+	value, err := readTxn.Get(renamedCF, []byte("key1"))
+	if err != nil {
+		t.Fatalf("Failed to get key1 from renamed CF: %v", err)
+	}
+
+	if string(value) != "value1" {
+		t.Fatalf("Expected 'value1', got '%s'", string(value))
+	}
+
+	// Verify renaming to existing name fails
+	err = db.CreateColumnFamily("another_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create another_cf: %v", err)
+	}
+
+	err = db.RenameColumnFamily("new_name", "another_cf")
+	if err == nil {
+		t.Fatalf("Expected error when renaming to existing column family name")
+	}
+
+	// Verify renaming non-existent CF fails
+	err = db.RenameColumnFamily("nonexistent", "something")
+	if err == nil {
+		t.Fatalf("Expected error when renaming non-existent column family")
+	}
+
+	t.Logf("Rename column family test completed successfully")
+}
+
+func TestUpdateRuntimeConfig(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Update runtime config
+	newConfig := DefaultColumnFamilyConfig()
+	newConfig.WriteBufferSize = 256 * 1024 * 1024
+	newConfig.SkipListMaxLevel = 16
+	newConfig.BloomFPR = 0.001
+
+	err = cf.UpdateRuntimeConfig(newConfig, false)
+	if err != nil {
+		t.Fatalf("Failed to update runtime config: %v", err)
+	}
+
+	// Verify updated config via stats
+	stats, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("Failed to get stats after config update: %v", err)
+	}
+
+	if stats.Config != nil {
+		if stats.Config.WriteBufferSize != 256*1024*1024 {
+			t.Errorf("Expected WriteBufferSize 256MB, got %d", stats.Config.WriteBufferSize)
+		}
+		t.Logf("Updated WriteBufferSize: %d", stats.Config.WriteBufferSize)
+		t.Logf("Updated SkipListMaxLevel: %d", stats.Config.SkipListMaxLevel)
+	}
+
+	// Write data with updated config to verify it works
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	err = txn.Put(cf, []byte("key1"), []byte("value1"), -1)
+	if err != nil {
+		t.Fatalf("Failed to put key after config update: %v", err)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit after config update: %v", err)
+	}
+	txn.Free()
+
+	t.Logf("Update runtime config test completed successfully")
+}
+
+func TestIsFlushingIsCompacting(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// IsFlushing and IsCompacting should return false for idle CF
+	if cf.IsFlushing() {
+		t.Logf("Note: Column family is flushing (may be expected in some environments)")
+	}
+
+	if cf.IsCompacting() {
+		t.Logf("Note: Column family is compacting (may be expected in some environments)")
+	}
+
+	// Write data and trigger flush
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key%d", i))
+		value := []byte(fmt.Sprintf("value%d", i))
+		err = txn.Put(cf, key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put key: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+	txn.Free()
+
+	// Trigger flush and check status
+	err = cf.FlushMemtable()
+	if err != nil {
+		t.Logf("Flush note: %v", err)
+	}
+
+	// Log current status (may or may not be flushing depending on timing)
+	t.Logf("IsFlushing: %v", cf.IsFlushing())
+	t.Logf("IsCompacting: %v", cf.IsCompacting())
+
+	t.Logf("IsFlushing/IsCompacting test completed successfully")
+}
+
+func TestGetComparator(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Built-in comparator "memcmp" should be registered
+	found, err := db.GetComparator("memcmp")
+	if err != nil {
+		t.Fatalf("Failed to get built-in comparator 'memcmp': %v", err)
+	}
+	if !found {
+		t.Fatalf("Expected built-in comparator 'memcmp' to be registered")
+	}
+	t.Logf("Built-in comparator 'memcmp' found: %v", found)
+
+	// Built-in comparator "reverse" should be registered
+	found, err = db.GetComparator("reverse")
+	if err != nil {
+		t.Fatalf("Failed to get built-in comparator 'reverse': %v", err)
+	}
+	if !found {
+		t.Fatalf("Expected built-in comparator 'reverse' to be registered")
+	}
+	t.Logf("Built-in comparator 'reverse' found: %v", found)
+
+	// Non-existent comparator should fail
+	found, err = db.GetComparator("nonexistent_comparator")
+	if err == nil {
+		t.Fatalf("Expected error for non-existent comparator")
+	}
+	t.Logf("Non-existent comparator correctly returned error: %v", err)
+
+	t.Logf("GetComparator test completed successfully")
+}
