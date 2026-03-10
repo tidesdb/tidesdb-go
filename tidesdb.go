@@ -298,6 +298,21 @@ func Open(config Config) (*TidesDB, error) {
 	return &TidesDB{db: db}, nil
 }
 
+// Purge purges all in-memory queues and buffers for the entire database.
+func (db *TidesDB) Purge() error {
+	result := C.tidesdb_purge_db(db.db)
+	return errorFromCode(result, "failed to purge database")
+}
+
+// PurgeColumnFamily purges in-memory queues and buffers for a specific column family.
+func (db *TidesDB) PurgeColumnFamily(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	result := C.tidesdb_purge_column_family(db.db, cName)
+	return errorFromCode(result, "failed to purge column family")
+}
+
 // Close closes a TidesDB instance.
 func (db *TidesDB) Close() error {
 	if db == nil || db.db == nil {

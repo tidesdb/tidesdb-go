@@ -29,6 +29,68 @@ import (
 
 const testDBPath = "testdb"
 
+func TestPurge(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	err = db.Purge()
+	if err != nil {
+		t.Fatalf("Failed to purge database: %v", err)
+	}
+}
+
+func TestPurgeColumnFamily(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	err = db.PurgeColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to purge column family: %v", err)
+	}
+}
+
 func cleanupTestDB(t *testing.T) {
 	os.RemoveAll(testDBPath)
 }
