@@ -2938,3 +2938,380 @@ func TestGetComparator(t *testing.T) {
 
 	t.Logf("GetComparator test completed successfully")
 }
+
+func TestSyncWal(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create column family with SyncNone to test manual WAL sync
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.SyncMode = SyncNone
+
+	err = db.CreateColumnFamily("sync_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("sync_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write some data
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("sync_key_%d", i))
+		value := []byte(fmt.Sprintf("sync_value_%d", i))
+		err = txn.Put(cf, key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put key: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Force WAL sync
+	err = cf.SyncWal()
+	if err != nil {
+		t.Fatalf("Failed to sync WAL: %v", err)
+	}
+
+	// Verify data is still readable after sync
+	readTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin read transaction: %v", err)
+	}
+	defer readTxn.Free()
+
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("sync_key_%d", i))
+		expectedValue := fmt.Sprintf("sync_value_%d", i)
+
+		value, err := readTxn.Get(cf, key)
+		if err != nil {
+			t.Fatalf("Failed to get key %s after WAL sync: %v", key, err)
+		}
+
+		if string(value) != expectedValue {
+			t.Fatalf("Expected '%s', got '%s'", expectedValue, string(value))
+		}
+	}
+
+	t.Logf("SyncWal test completed successfully")
+}
+
+func TestPurgeCF(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.WriteBufferSize = 1024 // Small buffer to force flushes
+
+	err = db.CreateColumnFamily("purge_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("purge_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write multiple batches to create multiple SSTables
+	for batch := 0; batch < 5; batch++ {
+		txn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin transaction: %v", err)
+		}
+
+		for i := 0; i < 20; i++ {
+			key := []byte(fmt.Sprintf("purge_key_%d_%d", batch, i))
+			value := make([]byte, 256)
+			for j := range value {
+				value[j] = byte(i % 256)
+			}
+			err = txn.Put(cf, key, value, -1)
+			if err != nil {
+				t.Fatalf("Failed to put key: %v", err)
+			}
+		}
+
+		err = txn.Commit()
+		if err != nil {
+			t.Fatalf("Failed to commit transaction: %v", err)
+		}
+		txn.Free()
+	}
+
+	// Purge the column family (synchronous flush + compaction)
+	err = cf.PurgeCF()
+	if err != nil {
+		t.Fatalf("Failed to purge column family: %v", err)
+	}
+
+	// After purge, flushing and compacting should be done
+	if cf.IsFlushing() {
+		t.Logf("Note: Column family still flushing after purge (unexpected)")
+	}
+	if cf.IsCompacting() {
+		t.Logf("Note: Column family still compacting after purge (unexpected)")
+	}
+
+	// Verify data is still readable
+	readTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin read transaction: %v", err)
+	}
+	defer readTxn.Free()
+
+	value, err := readTxn.Get(cf, []byte("purge_key_0_0"))
+	if err != nil {
+		t.Fatalf("Failed to get key after purge: %v", err)
+	}
+	if len(value) != 256 {
+		t.Fatalf("Expected value length 256, got %d", len(value))
+	}
+
+	t.Logf("PurgeCF test completed successfully")
+}
+
+func TestPurge(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.WriteBufferSize = 1024
+
+	// Create multiple column families
+	cfNames := []string{"purge_cf1", "purge_cf2"}
+	for _, name := range cfNames {
+		err = db.CreateColumnFamily(name, cfConfig)
+		if err != nil {
+			t.Fatalf("Failed to create column family %s: %v", name, err)
+		}
+	}
+
+	// Write data to each column family
+	for _, name := range cfNames {
+		cf, err := db.GetColumnFamily(name)
+		if err != nil {
+			t.Fatalf("Failed to get column family %s: %v", name, err)
+		}
+
+		for batch := 0; batch < 3; batch++ {
+			txn, err := db.BeginTxn()
+			if err != nil {
+				t.Fatalf("Failed to begin transaction: %v", err)
+			}
+
+			for i := 0; i < 20; i++ {
+				key := []byte(fmt.Sprintf("key_%d_%d", batch, i))
+				value := make([]byte, 128)
+				for j := range value {
+					value[j] = byte(i % 256)
+				}
+				err = txn.Put(cf, key, value, -1)
+				if err != nil {
+					t.Fatalf("Failed to put key: %v", err)
+				}
+			}
+
+			err = txn.Commit()
+			if err != nil {
+				t.Fatalf("Failed to commit transaction: %v", err)
+			}
+			txn.Free()
+		}
+	}
+
+	// Purge entire database (all CFs)
+	err = db.Purge()
+	if err != nil {
+		t.Fatalf("Failed to purge database: %v", err)
+	}
+
+	// Verify data in all column families is still readable
+	for _, name := range cfNames {
+		cf, err := db.GetColumnFamily(name)
+		if err != nil {
+			t.Fatalf("Failed to get column family %s after purge: %v", name, err)
+		}
+
+		readTxn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin read transaction: %v", err)
+		}
+
+		value, err := readTxn.Get(cf, []byte("key_0_0"))
+		if err != nil {
+			t.Fatalf("Failed to get key from %s after purge: %v", name, err)
+		}
+		if len(value) != 128 {
+			t.Fatalf("Expected value length 128 in %s, got %d", name, len(value))
+		}
+
+		readTxn.Free()
+	}
+
+	t.Logf("Purge (database-level) test completed successfully")
+}
+
+func TestGetDbStats(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Get stats with no column families
+	dbStats, err := db.GetDbStats()
+	if err != nil {
+		t.Fatalf("Failed to get database stats: %v", err)
+	}
+
+	if dbStats.NumColumnFamilies != 0 {
+		t.Fatalf("Expected 0 column families, got %d", dbStats.NumColumnFamilies)
+	}
+	t.Logf("Initial DB stats: %d CFs, total memory: %d", dbStats.NumColumnFamilies, dbStats.TotalMemory)
+
+	// Create column families and add data
+	cfConfig := DefaultColumnFamilyConfig()
+
+	err = db.CreateColumnFamily("stats_cf1", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	err = db.CreateColumnFamily("stats_cf2", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf1, err := db.GetColumnFamily("stats_cf1")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write data
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 50; i++ {
+		key := []byte(fmt.Sprintf("stats_key_%d", i))
+		value := []byte(fmt.Sprintf("stats_value_%d", i))
+		err = txn.Put(cf1, key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put key: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Get stats after creating CFs and data
+	dbStats, err = db.GetDbStats()
+	if err != nil {
+		t.Fatalf("Failed to get database stats after data: %v", err)
+	}
+
+	if dbStats.NumColumnFamilies != 2 {
+		t.Fatalf("Expected 2 column families, got %d", dbStats.NumColumnFamilies)
+	}
+
+	if dbStats.TotalMemory == 0 {
+		t.Fatalf("Expected non-zero total memory")
+	}
+
+	if dbStats.ResolvedMemoryLimit == 0 {
+		t.Fatalf("Expected non-zero resolved memory limit")
+	}
+
+	t.Logf("DB Stats after data:")
+	t.Logf("  Column families: %d", dbStats.NumColumnFamilies)
+	t.Logf("  Total memory: %d bytes", dbStats.TotalMemory)
+	t.Logf("  Available memory: %d bytes", dbStats.AvailableMemory)
+	t.Logf("  Resolved memory limit: %d bytes", dbStats.ResolvedMemoryLimit)
+	t.Logf("  Memory pressure level: %d", dbStats.MemoryPressureLevel)
+	t.Logf("  Flush pending count: %d", dbStats.FlushPendingCount)
+	t.Logf("  Total memtable bytes: %d", dbStats.TotalMemtableBytes)
+	t.Logf("  Total immutable count: %d", dbStats.TotalImmutableCount)
+	t.Logf("  Total SSTable count: %d", dbStats.TotalSstableCount)
+	t.Logf("  Total data size: %d bytes", dbStats.TotalDataSizeBytes)
+	t.Logf("  Open SSTables: %d", dbStats.NumOpenSstables)
+	t.Logf("  Global seq: %d", dbStats.GlobalSeq)
+	t.Logf("  Txn memory bytes: %d", dbStats.TxnMemoryBytes)
+	t.Logf("  Compaction queue size: %d", dbStats.CompactionQueueSize)
+	t.Logf("  Flush queue size: %d", dbStats.FlushQueueSize)
+
+	t.Logf("GetDbStats test completed successfully")
+}
