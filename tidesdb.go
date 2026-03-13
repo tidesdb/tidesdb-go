@@ -183,6 +183,25 @@ type CacheStats struct {
 	NumPartitions uint64
 }
 
+// DbStats is aggregate statistics across the entire database instance.
+type DbStats struct {
+	NumColumnFamilies   int
+	TotalMemory         uint64
+	AvailableMemory     uint64
+	ResolvedMemoryLimit uint64
+	MemoryPressureLevel int
+	FlushPendingCount   int
+	TotalMemtableBytes  int64
+	TotalImmutableCount int
+	TotalSstableCount   int
+	TotalDataSizeBytes  uint64
+	NumOpenSstables     int
+	GlobalSeq           uint64
+	TxnMemoryBytes      int64
+	CompactionQueueSize uint64
+	FlushQueueSize      uint64
+}
+
 // errorFromCode converts a C error code to a GO error.
 func errorFromCode(code C.int, context string) error {
 	if code == C.TDB_SUCCESS {
@@ -604,6 +623,58 @@ func (cf *ColumnFamily) IsFlushing() bool {
 // IsCompacting checks if a column family has a compaction operation in progress.
 func (cf *ColumnFamily) IsCompacting() bool {
 	return C.tidesdb_is_compacting(cf.cf) != 0
+}
+
+// SyncWal forces an immediate fsync of the active write-ahead log for a column family.
+// This is useful for explicit durability control when using SyncNone or SyncInterval modes.
+func (cf *ColumnFamily) SyncWal() error {
+	result := C.tidesdb_sync_wal(cf.cf)
+	return errorFromCode(result, "failed to sync WAL")
+}
+
+// PurgeCF forces a synchronous flush and aggressive compaction for a single column family.
+// Unlike FlushMemtable and Compact (which are non-blocking), PurgeCF blocks until all
+// flush and compaction I/O is complete.
+func (cf *ColumnFamily) PurgeCF() error {
+	result := C.tidesdb_purge_cf(cf.cf)
+	return errorFromCode(result, "failed to purge column family")
+}
+
+// Purge forces a synchronous flush and aggressive compaction for all column families,
+// then drains both the global flush and compaction queues. This blocks until all work
+// is complete.
+func (db *TidesDB) Purge() error {
+	result := C.tidesdb_purge(db.db)
+	return errorFromCode(result, "failed to purge database")
+}
+
+// GetDbStats retrieves aggregate statistics across the entire database instance.
+// Unlike GetStats (which heap-allocates), GetDbStats fills a caller-provided struct
+// on the stack. No free is needed.
+func (db *TidesDB) GetDbStats() (*DbStats, error) {
+	var cStats C.tidesdb_db_stats_t
+	result := C.tidesdb_get_db_stats(db.db, &cStats)
+	if result != C.TDB_SUCCESS {
+		return nil, errorFromCode(result, "failed to get database stats")
+	}
+
+	return &DbStats{
+		NumColumnFamilies:   int(cStats.num_column_families),
+		TotalMemory:         uint64(cStats.total_memory),
+		AvailableMemory:     uint64(cStats.available_memory),
+		ResolvedMemoryLimit: uint64(cStats.resolved_memory_limit),
+		MemoryPressureLevel: int(cStats.memory_pressure_level),
+		FlushPendingCount:   int(cStats.flush_pending_count),
+		TotalMemtableBytes:  int64(cStats.total_memtable_bytes),
+		TotalImmutableCount: int(cStats.total_immutable_count),
+		TotalSstableCount:   int(cStats.total_sstable_count),
+		TotalDataSizeBytes:  uint64(cStats.total_data_size_bytes),
+		NumOpenSstables:     int(cStats.num_open_sstables),
+		GlobalSeq:           uint64(cStats.global_seq),
+		TxnMemoryBytes:      int64(cStats.txn_memory_bytes),
+		CompactionQueueSize: uint64(cStats.compaction_queue_size),
+		FlushQueueSize:      uint64(cStats.flush_queue_size),
+	}, nil
 }
 
 // UpdateRuntimeConfig updates runtime-safe configuration settings for a column family.
