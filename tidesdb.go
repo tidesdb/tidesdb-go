@@ -115,15 +115,21 @@ type ColumnFamily struct {
 
 // Config is the configuration for opening a TidesDB instance.
 type Config struct {
-	DBPath               string
-	NumFlushThreads      int
-	NumCompactionThreads int
-	LogLevel             LogLevel
-	BlockCacheSize       uint64
-	MaxOpenSSTables      uint64
-	MaxMemoryUsage       uint64
-	LogToFile            bool
-	LogTruncationAt      uint64
+	DBPath                             string
+	NumFlushThreads                    int
+	NumCompactionThreads               int
+	LogLevel                           LogLevel
+	BlockCacheSize                     uint64
+	MaxOpenSSTables                    uint64
+	MaxMemoryUsage                     uint64
+	LogToFile                          bool
+	LogTruncationAt                    uint64
+	UnifiedMemtable                    bool
+	UnifiedMemtableWriteBufferSize     uint64
+	UnifiedMemtableSkipListMaxLevel    int
+	UnifiedMemtableSkipListProbability float64
+	UnifiedMemtableSyncMode            SyncMode
+	UnifiedMemtableSyncInterval        uint64
 }
 
 // ColumnFamilyConfig is the configuration for a column family.
@@ -185,21 +191,27 @@ type CacheStats struct {
 
 // DbStats is aggregate statistics across the entire database instance.
 type DbStats struct {
-	NumColumnFamilies   int
-	TotalMemory         uint64
-	AvailableMemory     uint64
-	ResolvedMemoryLimit uint64
-	MemoryPressureLevel int
-	FlushPendingCount   int
-	TotalMemtableBytes  int64
-	TotalImmutableCount int
-	TotalSstableCount   int
-	TotalDataSizeBytes  uint64
-	NumOpenSstables     int
-	GlobalSeq           uint64
-	TxnMemoryBytes      int64
-	CompactionQueueSize uint64
-	FlushQueueSize      uint64
+	NumColumnFamilies      int
+	TotalMemory            uint64
+	AvailableMemory        uint64
+	ResolvedMemoryLimit    uint64
+	MemoryPressureLevel    int
+	FlushPendingCount      int
+	TotalMemtableBytes     int64
+	TotalImmutableCount    int
+	TotalSstableCount      int
+	TotalDataSizeBytes     uint64
+	NumOpenSstables        int
+	GlobalSeq              uint64
+	TxnMemoryBytes         int64
+	CompactionQueueSize    uint64
+	FlushQueueSize         uint64
+	UnifiedMemtableEnabled bool
+	UnifiedMemtableBytes   int64
+	UnifiedImmutableCount  int
+	UnifiedIsFlushing      bool
+	UnifiedNextCFIndex     uint32
+	UnifiedWalGeneration   uint64
 }
 
 // errorFromCode converts a C error code to a GO error.
@@ -247,15 +259,21 @@ func errorFromCode(code C.int, context string) error {
 // DefaultConfig returns a default database configuration.
 func DefaultConfig() Config {
 	return Config{
-		DBPath:               "",
-		NumFlushThreads:      2,
-		NumCompactionThreads: 2,
-		LogLevel:             LogInfo,
-		BlockCacheSize:       64 * 1024 * 1024,
-		MaxOpenSSTables:      256,
-		MaxMemoryUsage:       0,
-		LogToFile:            false,
-		LogTruncationAt:      24 * (1024 * 1024),
+		DBPath:                             "",
+		NumFlushThreads:                    2,
+		NumCompactionThreads:               2,
+		LogLevel:                           LogInfo,
+		BlockCacheSize:                     64 * 1024 * 1024,
+		MaxOpenSSTables:                    256,
+		MaxMemoryUsage:                     0,
+		LogToFile:                          false,
+		LogTruncationAt:                    24 * (1024 * 1024),
+		UnifiedMemtable:                    false,
+		UnifiedMemtableWriteBufferSize:     0,
+		UnifiedMemtableSkipListMaxLevel:    0,
+		UnifiedMemtableSkipListProbability: 0,
+		UnifiedMemtableSyncMode:            SyncNone,
+		UnifiedMemtableSyncInterval:        0,
 	}
 }
 
@@ -293,19 +311,29 @@ func Open(config Config) (*TidesDB, error) {
 	defer C.free(unsafe.Pointer(cPath))
 
 	cConfig := C.tidesdb_config_t{
-		db_path:                cPath,
-		num_flush_threads:      C.int(config.NumFlushThreads),
-		num_compaction_threads: C.int(config.NumCompactionThreads),
-		log_level:              C.tidesdb_log_level_t(config.LogLevel),
-		block_cache_size:       C.size_t(config.BlockCacheSize),
-		max_open_sstables:      C.size_t(config.MaxOpenSSTables),
-		max_memory_usage:       C.size_t(config.MaxMemoryUsage),
-		log_to_file:            C.int(0),
-		log_truncation_at:      C.size_t(config.LogTruncationAt),
+		db_path:                                cPath,
+		num_flush_threads:                      C.int(config.NumFlushThreads),
+		num_compaction_threads:                 C.int(config.NumCompactionThreads),
+		log_level:                              C.tidesdb_log_level_t(config.LogLevel),
+		block_cache_size:                       C.size_t(config.BlockCacheSize),
+		max_open_sstables:                      C.size_t(config.MaxOpenSSTables),
+		max_memory_usage:                       C.size_t(config.MaxMemoryUsage),
+		log_to_file:                            C.int(0),
+		log_truncation_at:                      C.size_t(config.LogTruncationAt),
+		unified_memtable:                       C.int(0),
+		unified_memtable_write_buffer_size:     C.size_t(config.UnifiedMemtableWriteBufferSize),
+		unified_memtable_skip_list_max_level:   C.int(config.UnifiedMemtableSkipListMaxLevel),
+		unified_memtable_skip_list_probability: C.float(config.UnifiedMemtableSkipListProbability),
+		unified_memtable_sync_mode:             C.int(config.UnifiedMemtableSyncMode),
+		unified_memtable_sync_interval_us:      C.uint64_t(config.UnifiedMemtableSyncInterval),
 	}
 
 	if config.LogToFile {
 		cConfig.log_to_file = C.int(1)
+	}
+
+	if config.UnifiedMemtable {
+		cConfig.unified_memtable = C.int(1)
 	}
 
 	var db *C.tidesdb_t
@@ -659,21 +687,27 @@ func (db *TidesDB) GetDbStats() (*DbStats, error) {
 	}
 
 	return &DbStats{
-		NumColumnFamilies:   int(cStats.num_column_families),
-		TotalMemory:         uint64(cStats.total_memory),
-		AvailableMemory:     uint64(cStats.available_memory),
-		ResolvedMemoryLimit: uint64(cStats.resolved_memory_limit),
-		MemoryPressureLevel: int(cStats.memory_pressure_level),
-		FlushPendingCount:   int(cStats.flush_pending_count),
-		TotalMemtableBytes:  int64(cStats.total_memtable_bytes),
-		TotalImmutableCount: int(cStats.total_immutable_count),
-		TotalSstableCount:   int(cStats.total_sstable_count),
-		TotalDataSizeBytes:  uint64(cStats.total_data_size_bytes),
-		NumOpenSstables:     int(cStats.num_open_sstables),
-		GlobalSeq:           uint64(cStats.global_seq),
-		TxnMemoryBytes:      int64(cStats.txn_memory_bytes),
-		CompactionQueueSize: uint64(cStats.compaction_queue_size),
-		FlushQueueSize:      uint64(cStats.flush_queue_size),
+		NumColumnFamilies:      int(cStats.num_column_families),
+		TotalMemory:            uint64(cStats.total_memory),
+		AvailableMemory:        uint64(cStats.available_memory),
+		ResolvedMemoryLimit:    uint64(cStats.resolved_memory_limit),
+		MemoryPressureLevel:    int(cStats.memory_pressure_level),
+		FlushPendingCount:      int(cStats.flush_pending_count),
+		TotalMemtableBytes:     int64(cStats.total_memtable_bytes),
+		TotalImmutableCount:    int(cStats.total_immutable_count),
+		TotalSstableCount:      int(cStats.total_sstable_count),
+		TotalDataSizeBytes:     uint64(cStats.total_data_size_bytes),
+		NumOpenSstables:        int(cStats.num_open_sstables),
+		GlobalSeq:              uint64(cStats.global_seq),
+		TxnMemoryBytes:         int64(cStats.txn_memory_bytes),
+		CompactionQueueSize:    uint64(cStats.compaction_queue_size),
+		FlushQueueSize:         uint64(cStats.flush_queue_size),
+		UnifiedMemtableEnabled: cStats.unified_memtable_enabled != 0,
+		UnifiedMemtableBytes:   int64(cStats.unified_memtable_bytes),
+		UnifiedImmutableCount:  int(cStats.unified_immutable_count),
+		UnifiedIsFlushing:      cStats.unified_is_flushing != 0,
+		UnifiedNextCFIndex:     uint32(cStats.unified_next_cf_index),
+		UnifiedWalGeneration:   uint64(cStats.unified_wal_generation),
 	}, nil
 }
 

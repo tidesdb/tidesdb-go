@@ -3315,3 +3315,116 @@ func TestGetDbStats(t *testing.T) {
 
 	t.Logf("GetDbStats test completed successfully")
 }
+
+func TestUnifiedMemtable(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+	var memtableBuffSize uint64 = 8 * 1024
+
+	config := Config{
+		DBPath:                             "testdb",
+		NumFlushThreads:                    2,
+		NumCompactionThreads:               2,
+		LogLevel:                           LogInfo,
+		BlockCacheSize:                     64 * 1024 * 1024,
+		MaxOpenSSTables:                    256,
+		UnifiedMemtable:                    true,
+		UnifiedMemtableWriteBufferSize:     memtableBuffSize,
+		UnifiedMemtableSkipListProbability: 0.25,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Get stats with no column families
+	dbStats, err := db.GetDbStats()
+	if err != nil {
+		t.Fatalf("Failed to get database stats: %v", err)
+	}
+
+	if !dbStats.UnifiedMemtableEnabled {
+		t.Fatalf("Unified memtable not enabled.")
+	}
+
+	// Create column families and add data
+	cfConfig := DefaultColumnFamilyConfig()
+
+	err = db.CreateColumnFamily("stats_cf1", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	err = db.CreateColumnFamily("stats_cf2", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf1, err := db.GetColumnFamily("stats_cf1")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write data
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	for i := 0; i < 500; i++ {
+		key := []byte(fmt.Sprintf("stats_key_%d", i))
+		value := []byte(fmt.Sprintf("stats_value_%d", i))
+		err = txn.Put(cf1, key, value, -1)
+		if err != nil {
+			t.Fatalf("Failed to put key: %v", err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+	txn.Free()
+
+	// Get stats after creating CFs and data
+	dbStats, err = db.GetDbStats()
+	if err != nil {
+		t.Fatalf("Failed to get database stats after data: %v", err)
+	}
+
+	if dbStats.NumColumnFamilies != 2 {
+		t.Fatalf("Expected 2 column families, got %d", dbStats.NumColumnFamilies)
+	}
+
+	if dbStats.TotalMemory == 0 {
+		t.Fatalf("Expected non-zero total memory")
+	}
+
+	// check bytes in active memtable
+	if dbStats.UnifiedMemtableBytes > int64(memtableBuffSize) {
+		t.Fatalf("Memtable buffer overflowed.")
+	}
+
+	t.Logf("DB Stats for unified memtable:")
+	t.Logf("  Column families: %d", dbStats.NumColumnFamilies)
+	t.Logf("  Total memory: %d bytes", dbStats.TotalMemory)
+	t.Logf("  Available memory: %d bytes", dbStats.AvailableMemory)
+	t.Logf("  Resolved memory limit: %d bytes", dbStats.ResolvedMemoryLimit)
+	t.Logf("  Memory pressure level: %d", dbStats.MemoryPressureLevel)
+	t.Logf("  Flush pending count: %d", dbStats.FlushPendingCount)
+	t.Logf("  Total memtable bytes: %d", dbStats.TotalMemtableBytes)
+	t.Logf("  Total immutable count: %d", dbStats.TotalImmutableCount)
+	t.Logf("  Total SSTable count: %d", dbStats.TotalSstableCount)
+	t.Logf("  Total data size: %d bytes", dbStats.TotalDataSizeBytes)
+	t.Logf("  Open SSTables: %d", dbStats.NumOpenSstables)
+	t.Logf("  Global seq: %d", dbStats.GlobalSeq)
+	t.Logf("  Txn memory bytes: %d", dbStats.TxnMemoryBytes)
+	t.Logf("  Compaction queue size: %d", dbStats.CompactionQueueSize)
+	t.Logf("  Flush queue size: %d", dbStats.FlushQueueSize)
+	t.Logf("  Unified memtable enabled: %t", dbStats.UnifiedMemtableEnabled)
+	t.Logf("  Unified memtable bytes: %d", dbStats.UnifiedMemtableBytes)
+
+	t.Logf("UnifiedMemtable test completed successfully")
+}
