@@ -3428,3 +3428,385 @@ func TestUnifiedMemtable(t *testing.T) {
 
 	t.Logf("UnifiedMemtable test completed successfully")
 }
+
+func TestInitFinalize(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	// Finalize first in case a previous test left it initialized
+	Finalize()
+
+	// Init with system allocator
+	err := Init()
+	if err != nil {
+		t.Fatalf("Failed to init TidesDB: %v", err)
+	}
+
+	// Second init should fail (already initialized)
+	err = Init()
+	if err == nil {
+		t.Fatalf("Expected error on double init, got nil")
+	}
+	t.Logf("Expected error on double init: %v", err)
+
+	// Open DB to verify init worked
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database after init: %v", err)
+	}
+
+	err = db.Close()
+	if err != nil {
+		t.Fatalf("Failed to close database: %v", err)
+	}
+
+	// Finalize
+	Finalize()
+	t.Logf("InitFinalize test completed successfully")
+}
+
+func TestIterKeyValue(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write data
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	testData := map[string]string{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": "value3",
+	}
+
+	for k, v := range testData {
+		err = txn.Put(cf, []byte(k), []byte(v), -1)
+		if err != nil {
+			t.Fatalf("Failed to put %s: %v", k, err)
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+	txn.Free()
+
+	// Read using KeyValue()
+	readTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin read transaction: %v", err)
+	}
+	defer readTxn.Free()
+
+	iter, err := readTxn.NewIterator(cf)
+	if err != nil {
+		t.Fatalf("Failed to create iterator: %v", err)
+	}
+	defer iter.Free()
+
+	iter.SeekToFirst()
+	count := 0
+	for iter.Valid() {
+		key, value, err := iter.KeyValue()
+		if err != nil {
+			t.Fatalf("Failed to get key-value: %v", err)
+		}
+
+		expectedValue, ok := testData[string(key)]
+		if !ok {
+			t.Fatalf("Unexpected key: %s", key)
+		}
+
+		if string(value) != expectedValue {
+			t.Fatalf("Expected value %s for key %s, got %s", expectedValue, key, value)
+		}
+
+		t.Logf("KeyValue: %s = %s", key, value)
+		count++
+		iter.Next()
+	}
+
+	if count != len(testData) {
+		t.Fatalf("Expected %d entries, got %d", len(testData), count)
+	}
+
+	t.Logf("IterKeyValue test completed successfully")
+}
+
+func TestColumnFamilyConfigObjectStoreFields(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.ObjectTargetFileSize = 128 * 1024 * 1024 // 128MB
+	cfConfig.ObjectLazyCompaction = 1
+	cfConfig.ObjectPrefetchCompaction = 0
+
+	err = db.CreateColumnFamily("objstore_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family with object store config: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("objstore_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	stats, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("Failed to get stats: %v", err)
+	}
+
+	if stats.Config == nil {
+		t.Fatalf("Expected config in stats, got nil")
+	}
+
+	t.Logf("ObjectTargetFileSize: %d", stats.Config.ObjectTargetFileSize)
+	t.Logf("ObjectLazyCompaction: %d", stats.Config.ObjectLazyCompaction)
+	t.Logf("ObjectPrefetchCompaction: %d", stats.Config.ObjectPrefetchCompaction)
+
+	t.Logf("ColumnFamilyConfigObjectStoreFields test completed successfully")
+}
+
+func TestDbStatsObjectStoreFields(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	dbStats, err := db.GetDbStats()
+	if err != nil {
+		t.Fatalf("Failed to get db stats: %v", err)
+	}
+
+	// Without object store configured, these should be defaults
+	if dbStats.ObjectStoreEnabled {
+		t.Fatalf("Expected object store disabled, got enabled")
+	}
+
+	if dbStats.ReplicaMode {
+		t.Fatalf("Expected replica mode disabled, got enabled")
+	}
+
+	t.Logf("ObjectStoreEnabled: %t", dbStats.ObjectStoreEnabled)
+	t.Logf("ObjectStoreConnector: %s", dbStats.ObjectStoreConnector)
+	t.Logf("LocalCacheBytesUsed: %d", dbStats.LocalCacheBytesUsed)
+	t.Logf("LocalCacheBytesMax: %d", dbStats.LocalCacheBytesMax)
+	t.Logf("LocalCacheNumFiles: %d", dbStats.LocalCacheNumFiles)
+	t.Logf("LastUploadedGeneration: %d", dbStats.LastUploadedGeneration)
+	t.Logf("UploadQueueDepth: %d", dbStats.UploadQueueDepth)
+	t.Logf("TotalUploads: %d", dbStats.TotalUploads)
+	t.Logf("TotalUploadFailures: %d", dbStats.TotalUploadFailures)
+	t.Logf("ReplicaMode: %t", dbStats.ReplicaMode)
+
+	t.Logf("DbStatsObjectStoreFields test completed successfully")
+}
+
+func TestObjStoreDefaultConfig(t *testing.T) {
+	cfg := ObjStoreDefaultConfig()
+
+	// Verify defaults match C defaults
+	if !cfg.CacheOnRead {
+		t.Fatalf("Expected CacheOnRead=true by default")
+	}
+	if !cfg.CacheOnWrite {
+		t.Fatalf("Expected CacheOnWrite=true by default")
+	}
+	if cfg.MaxConcurrentUploads <= 0 {
+		t.Fatalf("Expected positive MaxConcurrentUploads, got %d", cfg.MaxConcurrentUploads)
+	}
+	if cfg.MaxConcurrentDownloads <= 0 {
+		t.Fatalf("Expected positive MaxConcurrentDownloads, got %d", cfg.MaxConcurrentDownloads)
+	}
+
+	t.Logf("ObjStoreDefaultConfig:")
+	t.Logf("  CacheOnRead: %t", cfg.CacheOnRead)
+	t.Logf("  CacheOnWrite: %t", cfg.CacheOnWrite)
+	t.Logf("  MaxConcurrentUploads: %d", cfg.MaxConcurrentUploads)
+	t.Logf("  MaxConcurrentDownloads: %d", cfg.MaxConcurrentDownloads)
+	t.Logf("  MultipartThreshold: %d", cfg.MultipartThreshold)
+	t.Logf("  MultipartPartSize: %d", cfg.MultipartPartSize)
+	t.Logf("  SyncManifestToObject: %t", cfg.SyncManifestToObject)
+	t.Logf("  ReplicateWal: %t", cfg.ReplicateWal)
+	t.Logf("  WalUploadSync: %t", cfg.WalUploadSync)
+	t.Logf("  WalSyncThresholdBytes: %d", cfg.WalSyncThresholdBytes)
+	t.Logf("  WalSyncOnCommit: %t", cfg.WalSyncOnCommit)
+	t.Logf("  ReplicaMode: %t", cfg.ReplicaMode)
+	t.Logf("  ReplicaSyncIntervalUs: %d", cfg.ReplicaSyncIntervalUs)
+	t.Logf("  ReplicaReplayWal: %t", cfg.ReplicaReplayWal)
+
+	t.Logf("ObjStoreDefaultConfig test completed successfully")
+}
+
+func TestObjStoreFsCreate(t *testing.T) {
+	testDir := "testdb_objstore_fs"
+	os.RemoveAll(testDir)
+	defer os.RemoveAll(testDir)
+
+	os.MkdirAll(testDir, 0755)
+
+	store, err := ObjStoreFsCreate(testDir)
+	if err != nil {
+		t.Fatalf("Failed to create FS object store: %v", err)
+	}
+
+	if store == nil {
+		t.Fatalf("Expected non-nil store")
+	}
+
+	if store.store == nil {
+		t.Fatalf("Expected non-nil store handle")
+	}
+
+	t.Logf("ObjStoreFsCreate test completed successfully")
+}
+
+func TestCfConfigIni(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a column family with specific config
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.WriteBufferSize = 32 * 1024 * 1024
+	cfConfig.CompressionAlgorithm = ZstdCompression
+	cfConfig.EnableBloomFilter = true
+	cfConfig.BloomFPR = 0.005
+
+	err = db.CreateColumnFamily("ini_test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	// Save config to INI
+	iniFile := "testdb/test_config.ini"
+	err = CfConfigSaveToIni(iniFile, "ini_test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to save config to INI: %v", err)
+	}
+
+	// Load config from INI
+	loaded, err := CfConfigLoadFromIni(iniFile, "ini_test_cf")
+	if err != nil {
+		t.Fatalf("Failed to load config from INI: %v", err)
+	}
+
+	if loaded.WriteBufferSize != cfConfig.WriteBufferSize {
+		t.Fatalf("WriteBufferSize mismatch: expected %d, got %d", cfConfig.WriteBufferSize, loaded.WriteBufferSize)
+	}
+
+	if loaded.CompressionAlgorithm != cfConfig.CompressionAlgorithm {
+		t.Fatalf("CompressionAlgorithm mismatch: expected %d, got %d", cfConfig.CompressionAlgorithm, loaded.CompressionAlgorithm)
+	}
+
+	t.Logf("Loaded config from INI:")
+	t.Logf("  WriteBufferSize: %d", loaded.WriteBufferSize)
+	t.Logf("  CompressionAlgorithm: %d", loaded.CompressionAlgorithm)
+	t.Logf("  BloomFPR: %f", loaded.BloomFPR)
+	t.Logf("  EnableBloomFilter: %t", loaded.EnableBloomFilter)
+
+	t.Logf("CfConfigIni test completed successfully")
+}
+
+func TestErrorCodeReadonly(t *testing.T) {
+	// Just verify the constant exists and has the right value
+	if ErrReadonly != -13 {
+		t.Fatalf("Expected ErrReadonly = -13, got %d", ErrReadonly)
+	}
+	t.Logf("ErrReadonly = %d", ErrReadonly)
+	t.Logf("ErrorCodeReadonly test completed successfully")
+}
+
+func TestObjStoreBackendConstants(t *testing.T) {
+	if BackendFS != 0 {
+		t.Fatalf("Expected BackendFS = 0, got %d", BackendFS)
+	}
+	if BackendS3 != 1 {
+		t.Fatalf("Expected BackendS3 = 1, got %d", BackendS3)
+	}
+	if BackendUnknown != 99 {
+		t.Fatalf("Expected BackendUnknown = 99, got %d", BackendUnknown)
+	}
+	t.Logf("BackendFS=%d, BackendS3=%d, BackendUnknown=%d", BackendFS, BackendS3, BackendUnknown)
+	t.Logf("ObjStoreBackendConstants test completed successfully")
+}

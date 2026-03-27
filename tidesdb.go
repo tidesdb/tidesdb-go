@@ -91,7 +91,95 @@ const (
 	ErrInvalidDB   = C.TDB_ERR_INVALID_DB
 	ErrUnknown     = C.TDB_ERR_UNKNOWN
 	ErrLocked      = C.TDB_ERR_LOCKED
+	ErrReadonly    = C.TDB_ERR_READONLY
 )
+
+// ObjStoreBackend identifies the object store backend in use.
+type ObjStoreBackend int
+
+const (
+	BackendFS      ObjStoreBackend = C.TDB_BACKEND_FS
+	BackendS3      ObjStoreBackend = C.TDB_BACKEND_S3
+	BackendUnknown ObjStoreBackend = C.TDB_BACKEND_UNKNOWN
+)
+
+// ObjStore is an opaque object store connector handle.
+type ObjStore struct {
+	store *C.tidesdb_objstore_t
+}
+
+// ObjStoreConfig configures object store mode behavior.
+type ObjStoreConfig struct {
+	LocalCachePath         string
+	LocalCacheMaxBytes     uint64
+	CacheOnRead            bool
+	CacheOnWrite           bool
+	MaxConcurrentUploads   int
+	MaxConcurrentDownloads int
+	MultipartThreshold     uint64
+	MultipartPartSize      uint64
+	SyncManifestToObject   bool
+	ReplicateWal           bool
+	WalUploadSync          bool
+	WalSyncThresholdBytes  uint64
+	WalSyncOnCommit        bool
+	ReplicaMode            bool
+	ReplicaSyncIntervalUs  uint64
+	ReplicaReplayWal       bool
+}
+
+// ObjStoreDefaultConfig returns the default object store configuration.
+func ObjStoreDefaultConfig() ObjStoreConfig {
+	cConfig := C.tidesdb_objstore_default_config()
+	return ObjStoreConfig{
+		LocalCacheMaxBytes:     uint64(cConfig.local_cache_max_bytes),
+		CacheOnRead:            cConfig.cache_on_read != 0,
+		CacheOnWrite:           cConfig.cache_on_write != 0,
+		MaxConcurrentUploads:   int(cConfig.max_concurrent_uploads),
+		MaxConcurrentDownloads: int(cConfig.max_concurrent_downloads),
+		MultipartThreshold:     uint64(cConfig.multipart_threshold),
+		MultipartPartSize:      uint64(cConfig.multipart_part_size),
+		SyncManifestToObject:   cConfig.sync_manifest_to_object != 0,
+		ReplicateWal:           cConfig.replicate_wal != 0,
+		WalUploadSync:          cConfig.wal_upload_sync != 0,
+		WalSyncThresholdBytes:  uint64(cConfig.wal_sync_threshold_bytes),
+		WalSyncOnCommit:        cConfig.wal_sync_on_commit != 0,
+		ReplicaMode:            cConfig.replica_mode != 0,
+		ReplicaSyncIntervalUs:  uint64(cConfig.replica_sync_interval_us),
+		ReplicaReplayWal:       cConfig.replica_replay_wal != 0,
+	}
+}
+
+// ObjStoreFsCreate creates a filesystem-backed object store connector for testing and local replication.
+// Objects are stored as files under rootDir mirroring the key path structure.
+func ObjStoreFsCreate(rootDir string) (*ObjStore, error) {
+	cRootDir := C.CString(rootDir)
+	defer C.free(unsafe.Pointer(cRootDir))
+
+	store := C.tidesdb_objstore_fs_create(cRootDir)
+	if store == nil {
+		return nil, fmt.Errorf("failed to create filesystem object store at %s", rootDir)
+	}
+
+	return &ObjStore{store: store}, nil
+}
+
+// Init initializes TidesDB with the system allocator.
+// Must be called exactly once before any other TidesDB function.
+// If not called, TidesDB auto-initializes on the first Open.
+func Init() error {
+	result := C.tidesdb_init(nil, nil, nil, nil)
+	if result != 0 {
+		return fmt.Errorf("tidesdb_init failed: already initialized (code: %d)", result)
+	}
+	return nil
+}
+
+// Finalize finalizes TidesDB and resets the allocator.
+// After calling this, Init can be called again.
+func Finalize() {
+	C.tidesdb_finalize()
+}
 
 // TidesDB is a TidesDB instance.
 type TidesDB struct {
@@ -130,32 +218,37 @@ type Config struct {
 	UnifiedMemtableSkipListProbability float64
 	UnifiedMemtableSyncMode            SyncMode
 	UnifiedMemtableSyncInterval        uint64
+	ObjectStore                        *ObjStore
+	ObjectStoreConfig                  *ObjStoreConfig
 }
 
 // ColumnFamilyConfig is the configuration for a column family.
 type ColumnFamilyConfig struct {
-	Name                  string
-	WriteBufferSize       uint64
-	LevelSizeRatio        uint64
-	MinLevels             int
-	DividingLevelOffset   int
-	KlogValueThreshold    uint64
-	CompressionAlgorithm  CompressionAlgorithm
-	EnableBloomFilter     bool
-	BloomFPR              float64
-	EnableBlockIndexes    bool
-	IndexSampleRatio      int
-	BlockIndexPrefixLen   int
-	SyncMode              SyncMode
-	SyncIntervalUs        uint64
-	ComparatorName        string
-	SkipListMaxLevel      int
-	SkipListProbability   float32
-	DefaultIsolationLevel IsolationLevel
-	MinDiskSpace          uint64
-	L1FileCountTrigger    int
-	L0QueueStallThreshold int
-	UseBtree              int
+	Name                     string
+	WriteBufferSize          uint64
+	LevelSizeRatio           uint64
+	MinLevels                int
+	DividingLevelOffset      int
+	KlogValueThreshold       uint64
+	CompressionAlgorithm     CompressionAlgorithm
+	EnableBloomFilter        bool
+	BloomFPR                 float64
+	EnableBlockIndexes       bool
+	IndexSampleRatio         int
+	BlockIndexPrefixLen      int
+	SyncMode                 SyncMode
+	SyncIntervalUs           uint64
+	ComparatorName           string
+	SkipListMaxLevel         int
+	SkipListProbability      float32
+	DefaultIsolationLevel    IsolationLevel
+	MinDiskSpace             uint64
+	L1FileCountTrigger       int
+	L0QueueStallThreshold    int
+	UseBtree                 int
+	ObjectTargetFileSize     uint64
+	ObjectLazyCompaction     int
+	ObjectPrefetchCompaction int
 }
 
 // Stats is statistics about a column family.
@@ -191,27 +284,37 @@ type CacheStats struct {
 
 // DbStats is aggregate statistics across the entire database instance.
 type DbStats struct {
-	NumColumnFamilies      int
-	TotalMemory            uint64
-	AvailableMemory        uint64
-	ResolvedMemoryLimit    uint64
-	MemoryPressureLevel    int
-	FlushPendingCount      int
-	TotalMemtableBytes     int64
-	TotalImmutableCount    int
-	TotalSstableCount      int
-	TotalDataSizeBytes     uint64
-	NumOpenSstables        int
-	GlobalSeq              uint64
-	TxnMemoryBytes         int64
-	CompactionQueueSize    uint64
-	FlushQueueSize         uint64
-	UnifiedMemtableEnabled bool
-	UnifiedMemtableBytes   int64
-	UnifiedImmutableCount  int
-	UnifiedIsFlushing      bool
-	UnifiedNextCFIndex     uint32
-	UnifiedWalGeneration   uint64
+	NumColumnFamilies       int
+	TotalMemory             uint64
+	AvailableMemory         uint64
+	ResolvedMemoryLimit     uint64
+	MemoryPressureLevel     int
+	FlushPendingCount       int
+	TotalMemtableBytes      int64
+	TotalImmutableCount     int
+	TotalSstableCount       int
+	TotalDataSizeBytes      uint64
+	NumOpenSstables         int
+	GlobalSeq               uint64
+	TxnMemoryBytes          int64
+	CompactionQueueSize     uint64
+	FlushQueueSize          uint64
+	UnifiedMemtableEnabled  bool
+	UnifiedMemtableBytes    int64
+	UnifiedImmutableCount   int
+	UnifiedIsFlushing       bool
+	UnifiedNextCFIndex      uint32
+	UnifiedWalGeneration    uint64
+	ObjectStoreEnabled      bool
+	ObjectStoreConnector    string
+	LocalCacheBytesUsed     uint64
+	LocalCacheBytesMax      uint64
+	LocalCacheNumFiles      int
+	LastUploadedGeneration  uint64
+	UploadQueueDepth        uint64
+	TotalUploads            uint64
+	TotalUploadFailures     uint64
+	ReplicaMode             bool
 }
 
 // errorFromCode converts a C error code to a GO error.
@@ -246,6 +349,8 @@ func errorFromCode(code C.int, context string) error {
 		errMsg = "unknown error"
 	case C.TDB_ERR_LOCKED:
 		errMsg = "database is locked"
+	case C.TDB_ERR_READONLY:
+		errMsg = "database is read-only"
 	default:
 		errMsg = "unknown error"
 	}
@@ -300,9 +405,20 @@ func DefaultColumnFamilyConfig() ColumnFamilyConfig {
 		DefaultIsolationLevel: IsolationLevel(cConfig.default_isolation_level),
 		MinDiskSpace:          uint64(cConfig.min_disk_space),
 		L1FileCountTrigger:    int(cConfig.l1_file_count_trigger),
-		L0QueueStallThreshold: int(cConfig.l0_queue_stall_threshold),
-		UseBtree:              int(cConfig.use_btree),
+		L0QueueStallThreshold:    int(cConfig.l0_queue_stall_threshold),
+		UseBtree:                 int(cConfig.use_btree),
+		ObjectTargetFileSize:     uint64(cConfig.object_target_file_size),
+		ObjectLazyCompaction:     int(cConfig.object_lazy_compaction),
+		ObjectPrefetchCompaction: int(cConfig.object_prefetch_compaction),
 	}
+}
+
+// boolToInt converts a bool to C.int (0 or 1).
+func boolToInt(b bool) C.int {
+	if b {
+		return C.int(1)
+	}
+	return C.int(0)
 }
 
 // Open opens a TidesDB instance with the given configuration.
@@ -334,6 +450,35 @@ func Open(config Config) (*TidesDB, error) {
 
 	if config.UnifiedMemtable {
 		cConfig.unified_memtable = C.int(1)
+	}
+
+	if config.ObjectStore != nil {
+		cConfig.object_store = config.ObjectStore.store
+	}
+
+	var cObjStoreConfig C.tidesdb_objstore_config_t
+	if config.ObjectStoreConfig != nil {
+		osc := config.ObjectStoreConfig
+		if osc.LocalCachePath != "" {
+			cObjStoreConfig.local_cache_path = C.CString(osc.LocalCachePath)
+			defer C.free(unsafe.Pointer(cObjStoreConfig.local_cache_path))
+		}
+		cObjStoreConfig.local_cache_max_bytes = C.size_t(osc.LocalCacheMaxBytes)
+		cObjStoreConfig.cache_on_read = boolToInt(osc.CacheOnRead)
+		cObjStoreConfig.cache_on_write = boolToInt(osc.CacheOnWrite)
+		cObjStoreConfig.max_concurrent_uploads = C.int(osc.MaxConcurrentUploads)
+		cObjStoreConfig.max_concurrent_downloads = C.int(osc.MaxConcurrentDownloads)
+		cObjStoreConfig.multipart_threshold = C.size_t(osc.MultipartThreshold)
+		cObjStoreConfig.multipart_part_size = C.size_t(osc.MultipartPartSize)
+		cObjStoreConfig.sync_manifest_to_object = boolToInt(osc.SyncManifestToObject)
+		cObjStoreConfig.replicate_wal = boolToInt(osc.ReplicateWal)
+		cObjStoreConfig.wal_upload_sync = boolToInt(osc.WalUploadSync)
+		cObjStoreConfig.wal_sync_threshold_bytes = C.size_t(osc.WalSyncThresholdBytes)
+		cObjStoreConfig.wal_sync_on_commit = boolToInt(osc.WalSyncOnCommit)
+		cObjStoreConfig.replica_mode = boolToInt(osc.ReplicaMode)
+		cObjStoreConfig.replica_sync_interval_us = C.uint64_t(osc.ReplicaSyncIntervalUs)
+		cObjStoreConfig.replica_replay_wal = boolToInt(osc.ReplicaReplayWal)
+		cConfig.object_store_config = &cObjStoreConfig
 	}
 
 	var db *C.tidesdb_t
@@ -409,8 +554,11 @@ func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) er
 		default_isolation_level:  C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
 		min_disk_space:           C.uint64_t(config.MinDiskSpace),
 		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
-		l0_queue_stall_threshold: C.int(config.L0QueueStallThreshold),
-		use_btree:                C.int(config.UseBtree),
+		l0_queue_stall_threshold:     C.int(config.L0QueueStallThreshold),
+		use_btree:                    C.int(config.UseBtree),
+		object_target_file_size:      C.size_t(config.ObjectTargetFileSize),
+		object_lazy_compaction:       C.int(config.ObjectLazyCompaction),
+		object_prefetch_compaction:   C.int(config.ObjectPrefetchCompaction),
 	}
 
 	if config.EnableBloomFilter {
@@ -582,8 +730,11 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 			DefaultIsolationLevel: IsolationLevel(cStats.config.default_isolation_level),
 			MinDiskSpace:          uint64(cStats.config.min_disk_space),
 			L1FileCountTrigger:    int(cStats.config.l1_file_count_trigger),
-			L0QueueStallThreshold: int(cStats.config.l0_queue_stall_threshold),
-			UseBtree:              int(cStats.config.use_btree),
+			L0QueueStallThreshold:    int(cStats.config.l0_queue_stall_threshold),
+			UseBtree:                 int(cStats.config.use_btree),
+			ObjectTargetFileSize:     uint64(cStats.config.object_target_file_size),
+			ObjectLazyCompaction:     int(cStats.config.object_lazy_compaction),
+			ObjectPrefetchCompaction: int(cStats.config.object_prefetch_compaction),
 		}
 	}
 
@@ -708,6 +859,16 @@ func (db *TidesDB) GetDbStats() (*DbStats, error) {
 		UnifiedIsFlushing:      cStats.unified_is_flushing != 0,
 		UnifiedNextCFIndex:     uint32(cStats.unified_next_cf_index),
 		UnifiedWalGeneration:   uint64(cStats.unified_wal_generation),
+		ObjectStoreEnabled:     cStats.object_store_enabled != 0,
+		ObjectStoreConnector:   C.GoString(cStats.object_store_connector),
+		LocalCacheBytesUsed:    uint64(cStats.local_cache_bytes_used),
+		LocalCacheBytesMax:     uint64(cStats.local_cache_bytes_max),
+		LocalCacheNumFiles:     int(cStats.local_cache_num_files),
+		LastUploadedGeneration: uint64(cStats.last_uploaded_generation),
+		UploadQueueDepth:       uint64(cStats.upload_queue_depth),
+		TotalUploads:           uint64(cStats.total_uploads),
+		TotalUploadFailures:    uint64(cStats.total_upload_failures),
+		ReplicaMode:            cStats.replica_mode != 0,
 	}, nil
 }
 
@@ -733,8 +894,11 @@ func (cf *ColumnFamily) UpdateRuntimeConfig(config ColumnFamilyConfig, persistTo
 		default_isolation_level:  C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
 		min_disk_space:           C.uint64_t(config.MinDiskSpace),
 		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
-		l0_queue_stall_threshold: C.int(config.L0QueueStallThreshold),
-		use_btree:                C.int(config.UseBtree),
+		l0_queue_stall_threshold:     C.int(config.L0QueueStallThreshold),
+		use_btree:                    C.int(config.UseBtree),
+		object_target_file_size:      C.size_t(config.ObjectTargetFileSize),
+		object_lazy_compaction:       C.int(config.ObjectLazyCompaction),
+		object_prefetch_compaction:   C.int(config.ObjectPrefetchCompaction),
 	}
 
 	if config.EnableBloomFilter {
@@ -1002,10 +1166,127 @@ func (iter *Iterator) Value() ([]byte, error) {
 	return value, nil
 }
 
+// KeyValue retrieves both the current key and value from the iterator in a single call.
+// This is more efficient than calling Key() and Value() separately.
+func (iter *Iterator) KeyValue() ([]byte, []byte, error) {
+	var cKey *C.uint8_t
+	var cKeySize C.size_t
+	var cValue *C.uint8_t
+	var cValueSize C.size_t
+
+	result := C.tidesdb_iter_key_value(iter.iter, &cKey, &cKeySize, &cValue, &cValueSize)
+	if result != C.TDB_SUCCESS {
+		return nil, nil, errorFromCode(result, "failed to get key-value")
+	}
+
+	key := C.GoBytes(unsafe.Pointer(cKey), C.int(cKeySize))
+	value := C.GoBytes(unsafe.Pointer(cValue), C.int(cValueSize))
+	return key, value, nil
+}
+
 // Free frees the iterator resources.
 func (iter *Iterator) Free() {
 	if iter != nil && iter.iter != nil {
 		C.tidesdb_iter_free(iter.iter)
 		iter.iter = nil
 	}
+}
+
+// PromoteToPrimary switches a read-only replica database to primary mode.
+func (db *TidesDB) PromoteToPrimary() error {
+	result := C.tidesdb_promote_to_primary(db.db)
+	return errorFromCode(result, "failed to promote to primary")
+}
+
+// CfConfigLoadFromIni loads a column family configuration from an INI file.
+func CfConfigLoadFromIni(iniFile, sectionName string) (*ColumnFamilyConfig, error) {
+	cIniFile := C.CString(iniFile)
+	defer C.free(unsafe.Pointer(cIniFile))
+	cSectionName := C.CString(sectionName)
+	defer C.free(unsafe.Pointer(cSectionName))
+
+	var cConfig C.tidesdb_column_family_config_t
+	result := C.tidesdb_cf_config_load_from_ini(cIniFile, cSectionName, &cConfig)
+	if result != C.TDB_SUCCESS {
+		return nil, errorFromCode(result, "failed to load config from INI")
+	}
+
+	return &ColumnFamilyConfig{
+		Name:                     C.GoString(&cConfig.name[0]),
+		WriteBufferSize:          uint64(cConfig.write_buffer_size),
+		LevelSizeRatio:           uint64(cConfig.level_size_ratio),
+		MinLevels:                int(cConfig.min_levels),
+		DividingLevelOffset:      int(cConfig.dividing_level_offset),
+		KlogValueThreshold:       uint64(cConfig.klog_value_threshold),
+		CompressionAlgorithm:     CompressionAlgorithm(cConfig.compression_algorithm),
+		EnableBloomFilter:        cConfig.enable_bloom_filter != 0,
+		BloomFPR:                 float64(cConfig.bloom_fpr),
+		EnableBlockIndexes:       cConfig.enable_block_indexes != 0,
+		IndexSampleRatio:         int(cConfig.index_sample_ratio),
+		BlockIndexPrefixLen:      int(cConfig.block_index_prefix_len),
+		SyncMode:                 SyncMode(cConfig.sync_mode),
+		SyncIntervalUs:           uint64(cConfig.sync_interval_us),
+		ComparatorName:           C.GoString(&cConfig.comparator_name[0]),
+		SkipListMaxLevel:         int(cConfig.skip_list_max_level),
+		SkipListProbability:      float32(cConfig.skip_list_probability),
+		DefaultIsolationLevel:    IsolationLevel(cConfig.default_isolation_level),
+		MinDiskSpace:             uint64(cConfig.min_disk_space),
+		L1FileCountTrigger:       int(cConfig.l1_file_count_trigger),
+		L0QueueStallThreshold:    int(cConfig.l0_queue_stall_threshold),
+		UseBtree:                 int(cConfig.use_btree),
+		ObjectTargetFileSize:     uint64(cConfig.object_target_file_size),
+		ObjectLazyCompaction:     int(cConfig.object_lazy_compaction),
+		ObjectPrefetchCompaction: int(cConfig.object_prefetch_compaction),
+	}, nil
+}
+
+// CfConfigSaveToIni saves a column family configuration to an INI file.
+func CfConfigSaveToIni(iniFile, sectionName string, config ColumnFamilyConfig) error {
+	cIniFile := C.CString(iniFile)
+	defer C.free(unsafe.Pointer(cIniFile))
+	cSectionName := C.CString(sectionName)
+	defer C.free(unsafe.Pointer(cSectionName))
+
+	cConfig := C.tidesdb_column_family_config_t{
+		write_buffer_size:          C.size_t(config.WriteBufferSize),
+		level_size_ratio:           C.size_t(config.LevelSizeRatio),
+		min_levels:                 C.int(config.MinLevels),
+		dividing_level_offset:      C.int(config.DividingLevelOffset),
+		klog_value_threshold:       C.size_t(config.KlogValueThreshold),
+		compression_algorithm:      C.compression_algorithm(config.CompressionAlgorithm),
+		enable_bloom_filter:        boolToInt(config.EnableBloomFilter),
+		bloom_fpr:                  C.double(config.BloomFPR),
+		enable_block_indexes:       boolToInt(config.EnableBlockIndexes),
+		index_sample_ratio:         C.int(config.IndexSampleRatio),
+		block_index_prefix_len:     C.int(config.BlockIndexPrefixLen),
+		sync_mode:                  C.int(config.SyncMode),
+		sync_interval_us:           C.uint64_t(config.SyncIntervalUs),
+		skip_list_max_level:        C.int(config.SkipListMaxLevel),
+		skip_list_probability:      C.float(config.SkipListProbability),
+		default_isolation_level:    C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
+		min_disk_space:             C.uint64_t(config.MinDiskSpace),
+		l1_file_count_trigger:      C.int(config.L1FileCountTrigger),
+		l0_queue_stall_threshold:   C.int(config.L0QueueStallThreshold),
+		use_btree:                  C.int(config.UseBtree),
+		object_target_file_size:    C.size_t(config.ObjectTargetFileSize),
+		object_lazy_compaction:     C.int(config.ObjectLazyCompaction),
+		object_prefetch_compaction: C.int(config.ObjectPrefetchCompaction),
+	}
+
+	if config.Name != "" {
+		nameBytes := []byte(config.Name)
+		for i := 0; i < len(nameBytes) && i < 127; i++ {
+			cConfig.name[i] = C.char(nameBytes[i])
+		}
+	}
+
+	if config.ComparatorName != "" {
+		cCompName := C.CString(config.ComparatorName)
+		defer C.free(unsafe.Pointer(cCompName))
+		C.strncpy(&cConfig.comparator_name[0], cCompName, C.TDB_MAX_COMPARATOR_NAME-1)
+		cConfig.comparator_name[C.TDB_MAX_COMPARATOR_NAME-1] = 0
+	}
+
+	result := C.tidesdb_cf_config_save_to_ini(cIniFile, cSectionName, &cConfig)
+	return errorFromCode(result, "failed to save config to INI")
 }
