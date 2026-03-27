@@ -3337,7 +3337,12 @@ func TestUnifiedMemtable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		// Drain all pending flushes before close to avoid race between
+		// flush workers and the close path on macOS
+		db.Purge()
+		db.Close()
+	}()
 
 	// Get stats with no column families
 	dbStats, err := db.GetDbStats()
