@@ -859,9 +859,14 @@ func (db *TidesDB) GetDbStats() (*DbStats, error) {
 		UnifiedIsFlushing:      cStats.unified_is_flushing != 0,
 		UnifiedNextCFIndex:     uint32(cStats.unified_next_cf_index),
 		UnifiedWalGeneration:   uint64(cStats.unified_wal_generation),
-		ObjectStoreEnabled:     cStats.object_store_enabled != 0,
-		ObjectStoreConnector:   C.GoString(cStats.object_store_connector),
-		LocalCacheBytesUsed:    uint64(cStats.local_cache_bytes_used),
+		ObjectStoreEnabled: cStats.object_store_enabled != 0,
+		ObjectStoreConnector: func() string {
+			if cStats.object_store_connector != nil {
+				return C.GoString(cStats.object_store_connector)
+			}
+			return ""
+		}(),
+		LocalCacheBytesUsed: uint64(cStats.local_cache_bytes_used),
 		LocalCacheBytesMax:     uint64(cStats.local_cache_bytes_max),
 		LocalCacheNumFiles:     int(cStats.local_cache_num_files),
 		LastUploadedGeneration: uint64(cStats.last_uploaded_generation),
