@@ -17,8 +17,9 @@
 package tidesdb_go
 
 /*
+#include <stdint.h>
 #include <tidesdb/db.h>
-extern int set_commit_hook_bridge(tidesdb_column_family_t *cf, void *ctx);
+extern int set_commit_hook_bridge(tidesdb_column_family_t *cf, uintptr_t ctx);
 */
 import "C"
 import (
@@ -71,7 +72,7 @@ func (cf *ColumnFamily) SetCommitHook(fn CommitHookFunc) error {
 	commitHookCFMap[cfKey] = id
 	commitHookMu.Unlock()
 
-	result := C.set_commit_hook_bridge(cf.cf, unsafe.Pointer(id))
+	result := C.set_commit_hook_bridge(cf.cf, C.uintptr_t(id))
 	return errorFromCode(result, "failed to set commit hook")
 }
 

@@ -14,6 +14,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#include <stdint.h>
 #include <tidesdb/db.h>
 #include "_cgo_export.h"
 
@@ -23,7 +24,8 @@ int commit_hook_bridge(const tidesdb_commit_op_t *ops, int num_ops,
     return goCommitHookCallback((tidesdb_commit_op_t *)ops, num_ops, commit_seq, ctx);
 }
 
-int set_commit_hook_bridge(tidesdb_column_family_t *cf, void *ctx)
+int set_commit_hook_bridge(tidesdb_column_family_t *cf, uintptr_t ctx)
 {
-    return tidesdb_cf_set_commit_hook(cf, (tidesdb_commit_hook_fn)commit_hook_bridge, ctx);
+    return tidesdb_cf_set_commit_hook(cf, (tidesdb_commit_hook_fn)commit_hook_bridge,
+                                      (void *)ctx);
 }

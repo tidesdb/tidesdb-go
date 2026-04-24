@@ -35,9 +35,3 @@ BSD (Zstandard)
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Support
-
-For issues, questions, or discussions
-- GitHub Issues https://github.com/tidesdb/tidesdb-go/issues
-- Discord Community https://discord.gg/tWEmjR66cy
