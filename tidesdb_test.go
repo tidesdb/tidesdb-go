@@ -254,6 +254,98 @@ func TestTransactionPutGetDelete(t *testing.T) {
 	}
 }
 
+func TestTransactionSingleDelete(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	err = db.CreateColumnFamily("test_cf", cfConfig)
+	if err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("test_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	key := []byte("single_delete_key")
+	value := []byte("insert_once")
+
+	putTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin put transaction: %v", err)
+	}
+
+	err = putTxn.Put(cf, key, value, -1)
+	if err != nil {
+		t.Fatalf("Failed to put key-value pair: %v", err)
+	}
+
+	err = putTxn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit put transaction: %v", err)
+	}
+	putTxn.Free()
+
+	readTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin read transaction: %v", err)
+	}
+
+	gotValue, err := readTxn.Get(cf, key)
+	if err != nil {
+		t.Fatalf("Failed to get value: %v", err)
+	}
+	readTxn.Free()
+
+	if string(gotValue) != string(value) {
+		t.Fatalf("Expected value %s, got %s", value, gotValue)
+	}
+
+	singleDeleteTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin single-delete transaction: %v", err)
+	}
+
+	err = singleDeleteTxn.SingleDelete(cf, key)
+	if err != nil {
+		t.Fatalf("Failed to single-delete key: %v", err)
+	}
+
+	err = singleDeleteTxn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit single-delete transaction: %v", err)
+	}
+	singleDeleteTxn.Free()
+
+	verifyTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin verify transaction: %v", err)
+	}
+	defer verifyTxn.Free()
+
+	_, err = verifyTxn.Get(cf, key)
+	if err == nil {
+		t.Fatalf("Expected key to be single-deleted but it still exists")
+	}
+}
+
 func TestTransactionWithTTL(t *testing.T) {
 	cleanupTestDB(t)
 	defer cleanupTestDB(t)
@@ -2491,7 +2583,7 @@ func TestCommitHookClear(t *testing.T) {
 		t.Fatalf("Failed to clear commit hook: %v", err)
 	}
 
-	// Commit again — hook should NOT fire
+	// Commit again - hook should NOT fire
 	txn2, err := db.BeginTxn()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
@@ -3596,7 +3688,6 @@ func TestColumnFamilyConfigObjectStoreFields(t *testing.T) {
 	defer db.Close()
 
 	cfConfig := DefaultColumnFamilyConfig()
-	cfConfig.ObjectTargetFileSize = 128 * 1024 * 1024 // 128MB
 	cfConfig.ObjectLazyCompaction = 1
 	cfConfig.ObjectPrefetchCompaction = 0
 
@@ -3619,7 +3710,6 @@ func TestColumnFamilyConfigObjectStoreFields(t *testing.T) {
 		t.Fatalf("Expected config in stats, got nil")
 	}
 
-	t.Logf("ObjectTargetFileSize: %d", stats.Config.ObjectTargetFileSize)
 	t.Logf("ObjectLazyCompaction: %d", stats.Config.ObjectLazyCompaction)
 	t.Logf("ObjectPrefetchCompaction: %d", stats.Config.ObjectPrefetchCompaction)
 

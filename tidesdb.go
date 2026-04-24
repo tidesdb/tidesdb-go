@@ -246,7 +246,6 @@ type ColumnFamilyConfig struct {
 	L1FileCountTrigger       int
 	L0QueueStallThreshold    int
 	UseBtree                 int
-	ObjectTargetFileSize     uint64
 	ObjectLazyCompaction     int
 	ObjectPrefetchCompaction int
 }
@@ -407,7 +406,6 @@ func DefaultColumnFamilyConfig() ColumnFamilyConfig {
 		L1FileCountTrigger:    int(cConfig.l1_file_count_trigger),
 		L0QueueStallThreshold:    int(cConfig.l0_queue_stall_threshold),
 		UseBtree:                 int(cConfig.use_btree),
-		ObjectTargetFileSize:     uint64(cConfig.object_target_file_size),
 		ObjectLazyCompaction:     int(cConfig.object_lazy_compaction),
 		ObjectPrefetchCompaction: int(cConfig.object_prefetch_compaction),
 	}
@@ -556,7 +554,6 @@ func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) er
 		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
 		l0_queue_stall_threshold:     C.int(config.L0QueueStallThreshold),
 		use_btree:                    C.int(config.UseBtree),
-		object_target_file_size:      C.size_t(config.ObjectTargetFileSize),
 		object_lazy_compaction:       C.int(config.ObjectLazyCompaction),
 		object_prefetch_compaction:   C.int(config.ObjectPrefetchCompaction),
 	}
@@ -732,7 +729,6 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 			L1FileCountTrigger:    int(cStats.config.l1_file_count_trigger),
 			L0QueueStallThreshold:    int(cStats.config.l0_queue_stall_threshold),
 			UseBtree:                 int(cStats.config.use_btree),
-			ObjectTargetFileSize:     uint64(cStats.config.object_target_file_size),
 			ObjectLazyCompaction:     int(cStats.config.object_lazy_compaction),
 			ObjectPrefetchCompaction: int(cStats.config.object_prefetch_compaction),
 		}
@@ -761,9 +757,9 @@ func (db *TidesDB) GetCacheStats() (*CacheStats, error) {
 }
 
 // RangeCost estimates the computational cost of iterating between two keys in a column family.
-// The returned value is an opaque double — meaningful only for comparison with other values
+// The returned value is an opaque double - meaningful only for comparison with other values
 // from the same function. It uses only in-memory metadata and performs no disk I/O.
-// Key order does not matter — the function normalizes the range internally.
+// Key order does not matter - the function normalizes the range internally.
 func (cf *ColumnFamily) RangeCost(keyA, keyB []byte) (float64, error) {
 	var cKeyA, cKeyB *C.uint8_t
 	if len(keyA) > 0 {
@@ -901,7 +897,6 @@ func (cf *ColumnFamily) UpdateRuntimeConfig(config ColumnFamilyConfig, persistTo
 		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
 		l0_queue_stall_threshold:     C.int(config.L0QueueStallThreshold),
 		use_btree:                    C.int(config.UseBtree),
-		object_target_file_size:      C.size_t(config.ObjectTargetFileSize),
 		object_lazy_compaction:       C.int(config.ObjectLazyCompaction),
 		object_prefetch_compaction:   C.int(config.ObjectPrefetchCompaction),
 	}
@@ -1025,6 +1020,27 @@ func (txn *Transaction) Delete(cf *ColumnFamily, key []byte) error {
 
 	result := C.tidesdb_txn_delete(txn.txn, cf.cf, cKey, C.size_t(len(key)))
 	return errorFromCode(result, "failed to delete key")
+}
+
+// SingleDelete writes a tombstone carrying a caller-provided promise that the key
+// has been put at most once since its previous single-delete (or since the start
+// of history). This lets compaction drop the put and tombstone together as soon
+// as both appear in the same merge input, rather than carrying the tombstone
+// forward to the largest active level. Read semantics match Delete.
+//
+// The engine does not verify the promise at runtime; violating it can leave
+// older puts visible and is a bug in the caller. Use only for insert-once-then-
+// delete patterns (classic insert benchmarks, secondary indexes on never-updated
+// columns, log tables with scheduled purges). Not safe for repeated updates to
+// the same key - when in doubt, prefer Delete.
+func (txn *Transaction) SingleDelete(cf *ColumnFamily, key []byte) error {
+	var cKey *C.uint8_t
+	if len(key) > 0 {
+		cKey = (*C.uint8_t)(unsafe.Pointer(&key[0]))
+	}
+
+	result := C.tidesdb_txn_single_delete(txn.txn, cf.cf, cKey, C.size_t(len(key)))
+	return errorFromCode(result, "failed to single-delete key")
 }
 
 // Commit commits the transaction.
@@ -1239,7 +1255,6 @@ func CfConfigLoadFromIni(iniFile, sectionName string) (*ColumnFamilyConfig, erro
 		L1FileCountTrigger:       int(cConfig.l1_file_count_trigger),
 		L0QueueStallThreshold:    int(cConfig.l0_queue_stall_threshold),
 		UseBtree:                 int(cConfig.use_btree),
-		ObjectTargetFileSize:     uint64(cConfig.object_target_file_size),
 		ObjectLazyCompaction:     int(cConfig.object_lazy_compaction),
 		ObjectPrefetchCompaction: int(cConfig.object_prefetch_compaction),
 	}, nil
@@ -1273,7 +1288,6 @@ func CfConfigSaveToIni(iniFile, sectionName string, config ColumnFamilyConfig) e
 		l1_file_count_trigger:      C.int(config.L1FileCountTrigger),
 		l0_queue_stall_threshold:   C.int(config.L0QueueStallThreshold),
 		use_btree:                  C.int(config.UseBtree),
-		object_target_file_size:    C.size_t(config.ObjectTargetFileSize),
 		object_lazy_compaction:     C.int(config.ObjectLazyCompaction),
 		object_prefetch_compaction: C.int(config.ObjectPrefetchCompaction),
 	}
