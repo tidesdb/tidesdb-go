@@ -3905,3 +3905,286 @@ func TestObjStoreBackendConstants(t *testing.T) {
 	t.Logf("BackendFS=%d, BackendS3=%d, BackendUnknown=%d", BackendFS, BackendS3, BackendUnknown)
 	t.Logf("ObjStoreBackendConstants test completed successfully")
 }
+
+func TestTombstoneDensityConfig(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	defaults := DefaultColumnFamilyConfig()
+	if defaults.TombstoneDensityMinEntries == 0 {
+		t.Fatalf("Expected non-zero default TombstoneDensityMinEntries, got %d", defaults.TombstoneDensityMinEntries)
+	}
+	t.Logf("Default TombstoneDensityTrigger: %f", defaults.TombstoneDensityTrigger)
+	t.Logf("Default TombstoneDensityMinEntries: %d", defaults.TombstoneDensityMinEntries)
+
+	cfConfig := defaults
+	cfConfig.TombstoneDensityTrigger = 0.5
+	cfConfig.TombstoneDensityMinEntries = 256
+
+	if err := db.CreateColumnFamily("density_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+
+	cf, err := db.GetColumnFamily("density_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	stats, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("Failed to get stats: %v", err)
+	}
+
+	if stats.Config == nil {
+		t.Fatalf("Stats.Config was nil")
+	}
+	if stats.Config.TombstoneDensityTrigger != 0.5 {
+		t.Fatalf("TombstoneDensityTrigger mismatch: expected 0.5, got %f", stats.Config.TombstoneDensityTrigger)
+	}
+	if stats.Config.TombstoneDensityMinEntries != 256 {
+		t.Fatalf("TombstoneDensityMinEntries mismatch: expected 256, got %d", stats.Config.TombstoneDensityMinEntries)
+	}
+	t.Logf("Tombstone density config round-trip OK")
+}
+
+func TestTombstoneDensityStats(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.WriteBufferSize = 4 * 1024
+	if err := db.CreateColumnFamily("ts_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	cf, err := db.GetColumnFamily("ts_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Insert keys, then delete a portion to generate tombstones.
+	const total = 200
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin txn: %v", err)
+	}
+	for i := 0; i < total; i++ {
+		key := []byte(fmt.Sprintf("key%05d", i))
+		val := []byte(fmt.Sprintf("val%05d", i))
+		if err := txn.Put(cf, key, val, -1); err != nil {
+			t.Fatalf("Put failed at %d: %v", i, err)
+		}
+	}
+	if err := txn.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	txn.Free()
+
+	if err := cf.FlushMemtable(); err != nil {
+		t.Fatalf("FlushMemtable failed: %v", err)
+	}
+
+	delTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin delete txn: %v", err)
+	}
+	for i := 0; i < total/2; i++ {
+		key := []byte(fmt.Sprintf("key%05d", i))
+		if err := delTxn.Delete(cf, key); err != nil {
+			t.Fatalf("Delete failed at %d: %v", i, err)
+		}
+	}
+	if err := delTxn.Commit(); err != nil {
+		t.Fatalf("Commit delete failed: %v", err)
+	}
+	delTxn.Free()
+
+	if err := cf.FlushMemtable(); err != nil {
+		t.Fatalf("FlushMemtable (post delete) failed: %v", err)
+	}
+	// Allow the flush to land
+	time.Sleep(500 * time.Millisecond)
+
+	stats, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("Failed to get stats: %v", err)
+	}
+
+	t.Logf("TotalTombstones: %d", stats.TotalTombstones)
+	t.Logf("TombstoneRatio: %f", stats.TombstoneRatio)
+	t.Logf("MaxSSTDensity: %f", stats.MaxSSTDensity)
+	t.Logf("MaxSSTDensityLevel: %d", stats.MaxSSTDensityLevel)
+	t.Logf("LevelTombstoneCounts: %v", stats.LevelTombstoneCounts)
+
+	if stats.NumLevels > 0 && stats.LevelTombstoneCounts == nil {
+		t.Fatalf("Expected LevelTombstoneCounts when num_levels=%d", stats.NumLevels)
+	}
+	if stats.LevelTombstoneCounts != nil && len(stats.LevelTombstoneCounts) != stats.NumLevels {
+		t.Fatalf("LevelTombstoneCounts length=%d, expected %d", len(stats.LevelTombstoneCounts), stats.NumLevels)
+	}
+	if stats.TombstoneRatio < 0.0 || stats.TombstoneRatio > 1.0 {
+		t.Fatalf("TombstoneRatio out of range [0,1]: %f", stats.TombstoneRatio)
+	}
+	if stats.MaxSSTDensity < 0.0 || stats.MaxSSTDensity > 1.0 {
+		t.Fatalf("MaxSSTDensity out of range [0,1]: %f", stats.MaxSSTDensity)
+	}
+}
+
+func TestCompactRange(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := Config{
+		DBPath:               "testdb",
+		NumFlushThreads:      2,
+		NumCompactionThreads: 2,
+		LogLevel:             LogInfo,
+		BlockCacheSize:       64 * 1024 * 1024,
+		MaxOpenSSTables:      256,
+	}
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.WriteBufferSize = 4 * 1024
+	if err := db.CreateColumnFamily("range_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	cf, err := db.GetColumnFamily("range_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write and flush in a few batches to create multiple sstables
+	for batch := 0; batch < 4; batch++ {
+		txn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin txn: %v", err)
+		}
+		for i := 0; i < 50; i++ {
+			key := []byte(fmt.Sprintf("k_%02d_%04d", batch, i))
+			val := make([]byte, 256)
+			for j := range val {
+				val[j] = byte(i)
+			}
+			if err := txn.Put(cf, key, val, -1); err != nil {
+				t.Fatalf("Put failed: %v", err)
+			}
+		}
+		if err := txn.Commit(); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+		txn.Free()
+		if err := cf.FlushMemtable(); err != nil {
+			t.Fatalf("FlushMemtable failed: %v", err)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// Compact a narrow key range
+	start := []byte("k_01_")
+	end := []byte("k_02_")
+	if err := cf.CompactRange(start, end); err != nil {
+		t.Fatalf("CompactRange failed: %v", err)
+	}
+
+	// Both nil/empty endpoints should be rejected
+	if err := cf.CompactRange(nil, nil); err == nil {
+		t.Fatalf("Expected error when both bounds nil, got nil")
+	} else {
+		t.Logf("CompactRange(nil,nil) correctly rejected: %v", err)
+	}
+
+	// Verify keys outside the range are still readable
+	verifyTxn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin verify txn: %v", err)
+	}
+	defer verifyTxn.Free()
+
+	v, err := verifyTxn.Get(cf, []byte("k_03_0000"))
+	if err != nil {
+		t.Fatalf("Get post-compact failed: %v", err)
+	}
+	if len(v) != 256 {
+		t.Fatalf("Unexpected value length: %d", len(v))
+	}
+	t.Logf("CompactRange completed; post-compact read ok")
+}
+
+func TestMaxConcurrentFlushesConfig(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	defaults := DefaultConfig()
+	t.Logf("Default MaxConcurrentFlushes: %d", defaults.MaxConcurrentFlushes)
+
+	config := defaults
+	config.DBPath = "testdb"
+	config.MaxConcurrentFlushes = 1
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database with MaxConcurrentFlushes=1: %v", err)
+	}
+	defer db.Close()
+
+	// Smoke test that the DB still works with the override.
+	cfConfig := DefaultColumnFamilyConfig()
+	if err := db.CreateColumnFamily("flush_cap_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	cf, err := db.GetColumnFamily("flush_cap_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin txn: %v", err)
+	}
+	if err := txn.Put(cf, []byte("k"), []byte("v"), -1); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := txn.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	txn.Free()
+
+	if err := cf.FlushMemtable(); err != nil {
+		t.Fatalf("FlushMemtable failed: %v", err)
+	}
+}
