@@ -218,56 +218,64 @@ type Config struct {
 	UnifiedMemtableSkipListProbability float64
 	UnifiedMemtableSyncMode            SyncMode
 	UnifiedMemtableSyncInterval        uint64
+	MaxConcurrentFlushes               int
 	ObjectStore                        *ObjStore
 	ObjectStoreConfig                  *ObjStoreConfig
 }
 
 // ColumnFamilyConfig is the configuration for a column family.
 type ColumnFamilyConfig struct {
-	Name                     string
-	WriteBufferSize          uint64
-	LevelSizeRatio           uint64
-	MinLevels                int
-	DividingLevelOffset      int
-	KlogValueThreshold       uint64
-	CompressionAlgorithm     CompressionAlgorithm
-	EnableBloomFilter        bool
-	BloomFPR                 float64
-	EnableBlockIndexes       bool
-	IndexSampleRatio         int
-	BlockIndexPrefixLen      int
-	SyncMode                 SyncMode
-	SyncIntervalUs           uint64
-	ComparatorName           string
-	SkipListMaxLevel         int
-	SkipListProbability      float32
-	DefaultIsolationLevel    IsolationLevel
-	MinDiskSpace             uint64
-	L1FileCountTrigger       int
-	L0QueueStallThreshold    int
-	UseBtree                 int
-	ObjectLazyCompaction     int
-	ObjectPrefetchCompaction int
+	Name                        string
+	WriteBufferSize             uint64
+	LevelSizeRatio              uint64
+	MinLevels                   int
+	DividingLevelOffset         int
+	KlogValueThreshold          uint64
+	CompressionAlgorithm        CompressionAlgorithm
+	EnableBloomFilter           bool
+	BloomFPR                    float64
+	EnableBlockIndexes          bool
+	IndexSampleRatio            int
+	BlockIndexPrefixLen         int
+	SyncMode                    SyncMode
+	SyncIntervalUs              uint64
+	ComparatorName              string
+	SkipListMaxLevel            int
+	SkipListProbability         float32
+	DefaultIsolationLevel       IsolationLevel
+	MinDiskSpace                uint64
+	L1FileCountTrigger          int
+	L0QueueStallThreshold       int
+	TombstoneDensityTrigger     float64
+	TombstoneDensityMinEntries  uint64
+	UseBtree                    int
+	ObjectLazyCompaction        int
+	ObjectPrefetchCompaction    int
 }
 
 // Stats is statistics about a column family.
 type Stats struct {
-	NumLevels        int
-	MemtableSize     uint64
-	LevelSizes       []uint64
-	LevelNumSSTables []int
-	Config           *ColumnFamilyConfig
-	TotalKeys        uint64
-	TotalDataSize    uint64
-	AvgKeySize       float64
-	AvgValueSize     float64
-	LevelKeyCounts   []uint64
-	ReadAmp          float64
-	HitRate          float64
-	UseBtree         bool
-	BtreeTotalNodes  uint64
-	BtreeMaxHeight   uint32
-	BtreeAvgHeight   float64
+	NumLevels            int
+	MemtableSize         uint64
+	LevelSizes           []uint64
+	LevelNumSSTables     []int
+	Config               *ColumnFamilyConfig
+	TotalKeys            uint64
+	TotalDataSize        uint64
+	AvgKeySize           float64
+	AvgValueSize         float64
+	LevelKeyCounts       []uint64
+	ReadAmp              float64
+	HitRate              float64
+	UseBtree             bool
+	BtreeTotalNodes      uint64
+	BtreeMaxHeight       uint32
+	BtreeAvgHeight       float64
+	TotalTombstones      uint64
+	TombstoneRatio       float64
+	LevelTombstoneCounts []uint64
+	MaxSSTDensity        float64
+	MaxSSTDensityLevel   int
 }
 
 // CacheStats is statistics about the block cache.
@@ -362,22 +370,24 @@ func errorFromCode(code C.int, context string) error {
 
 // DefaultConfig returns a default database configuration.
 func DefaultConfig() Config {
+	cConfig := C.tidesdb_default_config()
 	return Config{
 		DBPath:                             "",
-		NumFlushThreads:                    2,
-		NumCompactionThreads:               2,
-		LogLevel:                           LogInfo,
-		BlockCacheSize:                     64 * 1024 * 1024,
-		MaxOpenSSTables:                    256,
-		MaxMemoryUsage:                     0,
-		LogToFile:                          false,
-		LogTruncationAt:                    24 * (1024 * 1024),
-		UnifiedMemtable:                    false,
-		UnifiedMemtableWriteBufferSize:     0,
-		UnifiedMemtableSkipListMaxLevel:    0,
-		UnifiedMemtableSkipListProbability: 0,
-		UnifiedMemtableSyncMode:            SyncNone,
-		UnifiedMemtableSyncInterval:        0,
+		NumFlushThreads:                    int(cConfig.num_flush_threads),
+		NumCompactionThreads:               int(cConfig.num_compaction_threads),
+		LogLevel:                           LogLevel(cConfig.log_level),
+		BlockCacheSize:                     uint64(cConfig.block_cache_size),
+		MaxOpenSSTables:                    uint64(cConfig.max_open_sstables),
+		MaxMemoryUsage:                     uint64(cConfig.max_memory_usage),
+		LogToFile:                          cConfig.log_to_file != 0,
+		LogTruncationAt:                    uint64(cConfig.log_truncation_at),
+		UnifiedMemtable:                    cConfig.unified_memtable != 0,
+		UnifiedMemtableWriteBufferSize:     uint64(cConfig.unified_memtable_write_buffer_size),
+		UnifiedMemtableSkipListMaxLevel:    int(cConfig.unified_memtable_skip_list_max_level),
+		UnifiedMemtableSkipListProbability: float64(cConfig.unified_memtable_skip_list_probability),
+		UnifiedMemtableSyncMode:            SyncMode(cConfig.unified_memtable_sync_mode),
+		UnifiedMemtableSyncInterval:        uint64(cConfig.unified_memtable_sync_interval_us),
+		MaxConcurrentFlushes:               int(cConfig.max_concurrent_flushes),
 	}
 }
 
@@ -385,29 +395,31 @@ func DefaultConfig() Config {
 func DefaultColumnFamilyConfig() ColumnFamilyConfig {
 	cConfig := C.tidesdb_default_column_family_config()
 	return ColumnFamilyConfig{
-		WriteBufferSize:       uint64(cConfig.write_buffer_size),
-		LevelSizeRatio:        uint64(cConfig.level_size_ratio),
-		MinLevels:             int(cConfig.min_levels),
-		DividingLevelOffset:   int(cConfig.dividing_level_offset),
-		KlogValueThreshold:    uint64(cConfig.klog_value_threshold),
-		CompressionAlgorithm:  CompressionAlgorithm(cConfig.compression_algorithm),
-		EnableBloomFilter:     cConfig.enable_bloom_filter != 0,
-		BloomFPR:              float64(cConfig.bloom_fpr),
-		EnableBlockIndexes:    cConfig.enable_block_indexes != 0,
-		IndexSampleRatio:      int(cConfig.index_sample_ratio),
-		BlockIndexPrefixLen:   int(cConfig.block_index_prefix_len),
-		SyncMode:              SyncMode(cConfig.sync_mode),
-		SyncIntervalUs:        uint64(cConfig.sync_interval_us),
-		ComparatorName:        C.GoString(&cConfig.comparator_name[0]),
-		SkipListMaxLevel:      int(cConfig.skip_list_max_level),
-		SkipListProbability:   float32(cConfig.skip_list_probability),
-		DefaultIsolationLevel: IsolationLevel(cConfig.default_isolation_level),
-		MinDiskSpace:          uint64(cConfig.min_disk_space),
-		L1FileCountTrigger:    int(cConfig.l1_file_count_trigger),
-		L0QueueStallThreshold:    int(cConfig.l0_queue_stall_threshold),
-		UseBtree:                 int(cConfig.use_btree),
-		ObjectLazyCompaction:     int(cConfig.object_lazy_compaction),
-		ObjectPrefetchCompaction: int(cConfig.object_prefetch_compaction),
+		WriteBufferSize:            uint64(cConfig.write_buffer_size),
+		LevelSizeRatio:             uint64(cConfig.level_size_ratio),
+		MinLevels:                  int(cConfig.min_levels),
+		DividingLevelOffset:        int(cConfig.dividing_level_offset),
+		KlogValueThreshold:         uint64(cConfig.klog_value_threshold),
+		CompressionAlgorithm:       CompressionAlgorithm(cConfig.compression_algorithm),
+		EnableBloomFilter:          cConfig.enable_bloom_filter != 0,
+		BloomFPR:                   float64(cConfig.bloom_fpr),
+		EnableBlockIndexes:         cConfig.enable_block_indexes != 0,
+		IndexSampleRatio:           int(cConfig.index_sample_ratio),
+		BlockIndexPrefixLen:        int(cConfig.block_index_prefix_len),
+		SyncMode:                   SyncMode(cConfig.sync_mode),
+		SyncIntervalUs:             uint64(cConfig.sync_interval_us),
+		ComparatorName:             C.GoString(&cConfig.comparator_name[0]),
+		SkipListMaxLevel:           int(cConfig.skip_list_max_level),
+		SkipListProbability:        float32(cConfig.skip_list_probability),
+		DefaultIsolationLevel:      IsolationLevel(cConfig.default_isolation_level),
+		MinDiskSpace:               uint64(cConfig.min_disk_space),
+		L1FileCountTrigger:         int(cConfig.l1_file_count_trigger),
+		L0QueueStallThreshold:      int(cConfig.l0_queue_stall_threshold),
+		TombstoneDensityTrigger:    float64(cConfig.tombstone_density_trigger),
+		TombstoneDensityMinEntries: uint64(cConfig.tombstone_density_min_entries),
+		UseBtree:                   int(cConfig.use_btree),
+		ObjectLazyCompaction:       int(cConfig.object_lazy_compaction),
+		ObjectPrefetchCompaction:   int(cConfig.object_prefetch_compaction),
 	}
 }
 
@@ -440,6 +452,7 @@ func Open(config Config) (*TidesDB, error) {
 		unified_memtable_skip_list_probability: C.float(config.UnifiedMemtableSkipListProbability),
 		unified_memtable_sync_mode:             C.int(config.UnifiedMemtableSyncMode),
 		unified_memtable_sync_interval_us:      C.uint64_t(config.UnifiedMemtableSyncInterval),
+		max_concurrent_flushes:                 C.int(config.MaxConcurrentFlushes),
 	}
 
 	if config.LogToFile {
@@ -533,29 +546,31 @@ func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) er
 	}
 
 	cConfig = C.tidesdb_column_family_config_t{
-		name:                     cConfig.name,
-		write_buffer_size:        C.size_t(config.WriteBufferSize),
-		level_size_ratio:         C.size_t(config.LevelSizeRatio),
-		min_levels:               C.int(config.MinLevels),
-		dividing_level_offset:    C.int(config.DividingLevelOffset),
-		klog_value_threshold:     C.size_t(config.KlogValueThreshold),
-		compression_algorithm:    C.compression_algorithm(config.CompressionAlgorithm),
-		enable_bloom_filter:      C.int(0),
-		bloom_fpr:                C.double(config.BloomFPR),
-		enable_block_indexes:     C.int(0),
-		index_sample_ratio:       C.int(config.IndexSampleRatio),
-		block_index_prefix_len:   C.int(config.BlockIndexPrefixLen),
-		sync_mode:                C.int(config.SyncMode),
-		sync_interval_us:         C.uint64_t(config.SyncIntervalUs),
-		skip_list_max_level:      C.int(config.SkipListMaxLevel),
-		skip_list_probability:    C.float(config.SkipListProbability),
-		default_isolation_level:  C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
-		min_disk_space:           C.uint64_t(config.MinDiskSpace),
-		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
-		l0_queue_stall_threshold:     C.int(config.L0QueueStallThreshold),
-		use_btree:                    C.int(config.UseBtree),
-		object_lazy_compaction:       C.int(config.ObjectLazyCompaction),
-		object_prefetch_compaction:   C.int(config.ObjectPrefetchCompaction),
+		name:                          cConfig.name,
+		write_buffer_size:             C.size_t(config.WriteBufferSize),
+		level_size_ratio:              C.size_t(config.LevelSizeRatio),
+		min_levels:                    C.int(config.MinLevels),
+		dividing_level_offset:         C.int(config.DividingLevelOffset),
+		klog_value_threshold:          C.size_t(config.KlogValueThreshold),
+		compression_algorithm:         C.compression_algorithm(config.CompressionAlgorithm),
+		enable_bloom_filter:           C.int(0),
+		bloom_fpr:                     C.double(config.BloomFPR),
+		enable_block_indexes:          C.int(0),
+		index_sample_ratio:            C.int(config.IndexSampleRatio),
+		block_index_prefix_len:        C.int(config.BlockIndexPrefixLen),
+		sync_mode:                     C.int(config.SyncMode),
+		sync_interval_us:              C.uint64_t(config.SyncIntervalUs),
+		skip_list_max_level:           C.int(config.SkipListMaxLevel),
+		skip_list_probability:         C.float(config.SkipListProbability),
+		default_isolation_level:       C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
+		min_disk_space:                C.uint64_t(config.MinDiskSpace),
+		l1_file_count_trigger:         C.int(config.L1FileCountTrigger),
+		l0_queue_stall_threshold:      C.int(config.L0QueueStallThreshold),
+		tombstone_density_trigger:     C.double(config.TombstoneDensityTrigger),
+		tombstone_density_min_entries: C.uint64_t(config.TombstoneDensityMinEntries),
+		use_btree:                     C.int(config.UseBtree),
+		object_lazy_compaction:        C.int(config.ObjectLazyCompaction),
+		object_prefetch_compaction:    C.int(config.ObjectPrefetchCompaction),
 	}
 
 	if config.EnableBloomFilter {
@@ -668,18 +683,22 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 	defer C.tidesdb_free_stats(cStats)
 
 	stats := &Stats{
-		NumLevels:       int(cStats.num_levels),
-		MemtableSize:    uint64(cStats.memtable_size),
-		TotalKeys:       uint64(cStats.total_keys),
-		TotalDataSize:   uint64(cStats.total_data_size),
-		AvgKeySize:      float64(cStats.avg_key_size),
-		AvgValueSize:    float64(cStats.avg_value_size),
-		ReadAmp:         float64(cStats.read_amp),
-		HitRate:         float64(cStats.hit_rate),
-		UseBtree:        cStats.use_btree != 0,
-		BtreeTotalNodes: uint64(cStats.btree_total_nodes),
-		BtreeMaxHeight:  uint32(cStats.btree_max_height),
-		BtreeAvgHeight:  float64(cStats.btree_avg_height),
+		NumLevels:          int(cStats.num_levels),
+		MemtableSize:       uint64(cStats.memtable_size),
+		TotalKeys:          uint64(cStats.total_keys),
+		TotalDataSize:      uint64(cStats.total_data_size),
+		AvgKeySize:         float64(cStats.avg_key_size),
+		AvgValueSize:       float64(cStats.avg_value_size),
+		ReadAmp:            float64(cStats.read_amp),
+		HitRate:            float64(cStats.hit_rate),
+		UseBtree:           cStats.use_btree != 0,
+		BtreeTotalNodes:    uint64(cStats.btree_total_nodes),
+		BtreeMaxHeight:     uint32(cStats.btree_max_height),
+		BtreeAvgHeight:     float64(cStats.btree_avg_height),
+		TotalTombstones:    uint64(cStats.total_tombstones),
+		TombstoneRatio:     float64(cStats.tombstone_ratio),
+		MaxSSTDensity:      float64(cStats.max_sst_density),
+		MaxSSTDensityLevel: int(cStats.max_sst_density_level),
 	}
 
 	if cStats.num_levels > 0 && cStats.level_sizes != nil {
@@ -706,31 +725,42 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 		}
 	}
 
+	if cStats.num_levels > 0 && cStats.level_tombstone_counts != nil {
+		levelTombstoneCounts := (*[1 << 30]C.uint64_t)(unsafe.Pointer(cStats.level_tombstone_counts))[:cStats.num_levels:cStats.num_levels]
+		stats.LevelTombstoneCounts = make([]uint64, cStats.num_levels)
+		for i := 0; i < int(cStats.num_levels); i++ {
+			stats.LevelTombstoneCounts[i] = uint64(levelTombstoneCounts[i])
+		}
+	}
+
 	if cStats.config != nil {
 		stats.Config = &ColumnFamilyConfig{
-			WriteBufferSize:       uint64(cStats.config.write_buffer_size),
-			LevelSizeRatio:        uint64(cStats.config.level_size_ratio),
-			MinLevels:             int(cStats.config.min_levels),
-			DividingLevelOffset:   int(cStats.config.dividing_level_offset),
-			KlogValueThreshold:    uint64(cStats.config.klog_value_threshold),
-			CompressionAlgorithm:  CompressionAlgorithm(cStats.config.compression_algorithm),
-			EnableBloomFilter:     cStats.config.enable_bloom_filter != 0,
-			BloomFPR:              float64(cStats.config.bloom_fpr),
-			EnableBlockIndexes:    cStats.config.enable_block_indexes != 0,
-			IndexSampleRatio:      int(cStats.config.index_sample_ratio),
-			BlockIndexPrefixLen:   int(cStats.config.block_index_prefix_len),
-			SyncMode:              SyncMode(cStats.config.sync_mode),
-			SyncIntervalUs:        uint64(cStats.config.sync_interval_us),
-			ComparatorName:        C.GoString(&cStats.config.comparator_name[0]),
-			SkipListMaxLevel:      int(cStats.config.skip_list_max_level),
-			SkipListProbability:   float32(cStats.config.skip_list_probability),
-			DefaultIsolationLevel: IsolationLevel(cStats.config.default_isolation_level),
-			MinDiskSpace:          uint64(cStats.config.min_disk_space),
-			L1FileCountTrigger:    int(cStats.config.l1_file_count_trigger),
-			L0QueueStallThreshold:    int(cStats.config.l0_queue_stall_threshold),
-			UseBtree:                 int(cStats.config.use_btree),
-			ObjectLazyCompaction:     int(cStats.config.object_lazy_compaction),
-			ObjectPrefetchCompaction: int(cStats.config.object_prefetch_compaction),
+			Name:                       C.GoString(&cStats.config.name[0]),
+			WriteBufferSize:            uint64(cStats.config.write_buffer_size),
+			LevelSizeRatio:             uint64(cStats.config.level_size_ratio),
+			MinLevels:                  int(cStats.config.min_levels),
+			DividingLevelOffset:        int(cStats.config.dividing_level_offset),
+			KlogValueThreshold:         uint64(cStats.config.klog_value_threshold),
+			CompressionAlgorithm:       CompressionAlgorithm(cStats.config.compression_algorithm),
+			EnableBloomFilter:          cStats.config.enable_bloom_filter != 0,
+			BloomFPR:                   float64(cStats.config.bloom_fpr),
+			EnableBlockIndexes:         cStats.config.enable_block_indexes != 0,
+			IndexSampleRatio:           int(cStats.config.index_sample_ratio),
+			BlockIndexPrefixLen:        int(cStats.config.block_index_prefix_len),
+			SyncMode:                   SyncMode(cStats.config.sync_mode),
+			SyncIntervalUs:             uint64(cStats.config.sync_interval_us),
+			ComparatorName:             C.GoString(&cStats.config.comparator_name[0]),
+			SkipListMaxLevel:           int(cStats.config.skip_list_max_level),
+			SkipListProbability:        float32(cStats.config.skip_list_probability),
+			DefaultIsolationLevel:      IsolationLevel(cStats.config.default_isolation_level),
+			MinDiskSpace:               uint64(cStats.config.min_disk_space),
+			L1FileCountTrigger:         int(cStats.config.l1_file_count_trigger),
+			L0QueueStallThreshold:      int(cStats.config.l0_queue_stall_threshold),
+			TombstoneDensityTrigger:    float64(cStats.config.tombstone_density_trigger),
+			TombstoneDensityMinEntries: uint64(cStats.config.tombstone_density_min_entries),
+			UseBtree:                   int(cStats.config.use_btree),
+			ObjectLazyCompaction:       int(cStats.config.object_lazy_compaction),
+			ObjectPrefetchCompaction:   int(cStats.config.object_prefetch_compaction),
 		}
 	}
 
@@ -782,6 +812,24 @@ func (cf *ColumnFamily) RangeCost(keyA, keyB []byte) (float64, error) {
 func (cf *ColumnFamily) Compact() error {
 	result := C.tidesdb_compact(cf.cf)
 	return errorFromCode(result, "failed to compact column family")
+}
+
+// CompactRange synchronously compacts every sstable whose key range overlaps
+// [startKey, endKey). Output is merged toward the largest level affected.
+// Both nil/empty endpoints is rejected - use Compact for full CF compaction.
+// The call blocks until the merge commits or fails; the calling goroutine
+// performs the work rather than enqueueing onto the compaction thread pool.
+func (cf *ColumnFamily) CompactRange(startKey, endKey []byte) error {
+	var cStart, cEnd *C.uint8_t
+	if len(startKey) > 0 {
+		cStart = (*C.uint8_t)(unsafe.Pointer(&startKey[0]))
+	}
+	if len(endKey) > 0 {
+		cEnd = (*C.uint8_t)(unsafe.Pointer(&endKey[0]))
+	}
+
+	result := C.tidesdb_compact_range(cf.cf, cStart, C.size_t(len(startKey)), cEnd, C.size_t(len(endKey)))
+	return errorFromCode(result, "failed to compact range")
 }
 
 // FlushMemtable manually triggers memtable flush for a column family.
@@ -877,28 +925,30 @@ func (db *TidesDB) GetDbStats() (*DbStats, error) {
 // If persistToDisk is true, changes are saved to config.ini in the column family directory.
 func (cf *ColumnFamily) UpdateRuntimeConfig(config ColumnFamilyConfig, persistToDisk bool) error {
 	cConfig := C.tidesdb_column_family_config_t{
-		write_buffer_size:        C.size_t(config.WriteBufferSize),
-		level_size_ratio:         C.size_t(config.LevelSizeRatio),
-		min_levels:               C.int(config.MinLevels),
-		dividing_level_offset:    C.int(config.DividingLevelOffset),
-		klog_value_threshold:     C.size_t(config.KlogValueThreshold),
-		compression_algorithm:    C.compression_algorithm(config.CompressionAlgorithm),
-		enable_bloom_filter:      C.int(0),
-		bloom_fpr:                C.double(config.BloomFPR),
-		enable_block_indexes:     C.int(0),
-		index_sample_ratio:       C.int(config.IndexSampleRatio),
-		block_index_prefix_len:   C.int(config.BlockIndexPrefixLen),
-		sync_mode:                C.int(config.SyncMode),
-		sync_interval_us:         C.uint64_t(config.SyncIntervalUs),
-		skip_list_max_level:      C.int(config.SkipListMaxLevel),
-		skip_list_probability:    C.float(config.SkipListProbability),
-		default_isolation_level:  C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
-		min_disk_space:           C.uint64_t(config.MinDiskSpace),
-		l1_file_count_trigger:    C.int(config.L1FileCountTrigger),
-		l0_queue_stall_threshold:     C.int(config.L0QueueStallThreshold),
-		use_btree:                    C.int(config.UseBtree),
-		object_lazy_compaction:       C.int(config.ObjectLazyCompaction),
-		object_prefetch_compaction:   C.int(config.ObjectPrefetchCompaction),
+		write_buffer_size:             C.size_t(config.WriteBufferSize),
+		level_size_ratio:              C.size_t(config.LevelSizeRatio),
+		min_levels:                    C.int(config.MinLevels),
+		dividing_level_offset:         C.int(config.DividingLevelOffset),
+		klog_value_threshold:          C.size_t(config.KlogValueThreshold),
+		compression_algorithm:         C.compression_algorithm(config.CompressionAlgorithm),
+		enable_bloom_filter:           C.int(0),
+		bloom_fpr:                     C.double(config.BloomFPR),
+		enable_block_indexes:          C.int(0),
+		index_sample_ratio:            C.int(config.IndexSampleRatio),
+		block_index_prefix_len:        C.int(config.BlockIndexPrefixLen),
+		sync_mode:                     C.int(config.SyncMode),
+		sync_interval_us:              C.uint64_t(config.SyncIntervalUs),
+		skip_list_max_level:           C.int(config.SkipListMaxLevel),
+		skip_list_probability:         C.float(config.SkipListProbability),
+		default_isolation_level:       C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
+		min_disk_space:                C.uint64_t(config.MinDiskSpace),
+		l1_file_count_trigger:         C.int(config.L1FileCountTrigger),
+		l0_queue_stall_threshold:      C.int(config.L0QueueStallThreshold),
+		tombstone_density_trigger:     C.double(config.TombstoneDensityTrigger),
+		tombstone_density_min_entries: C.uint64_t(config.TombstoneDensityMinEntries),
+		use_btree:                     C.int(config.UseBtree),
+		object_lazy_compaction:        C.int(config.ObjectLazyCompaction),
+		object_prefetch_compaction:    C.int(config.ObjectPrefetchCompaction),
 	}
 
 	if config.EnableBloomFilter {
@@ -1233,30 +1283,32 @@ func CfConfigLoadFromIni(iniFile, sectionName string) (*ColumnFamilyConfig, erro
 	}
 
 	return &ColumnFamilyConfig{
-		Name:                     C.GoString(&cConfig.name[0]),
-		WriteBufferSize:          uint64(cConfig.write_buffer_size),
-		LevelSizeRatio:           uint64(cConfig.level_size_ratio),
-		MinLevels:                int(cConfig.min_levels),
-		DividingLevelOffset:      int(cConfig.dividing_level_offset),
-		KlogValueThreshold:       uint64(cConfig.klog_value_threshold),
-		CompressionAlgorithm:     CompressionAlgorithm(cConfig.compression_algorithm),
-		EnableBloomFilter:        cConfig.enable_bloom_filter != 0,
-		BloomFPR:                 float64(cConfig.bloom_fpr),
-		EnableBlockIndexes:       cConfig.enable_block_indexes != 0,
-		IndexSampleRatio:         int(cConfig.index_sample_ratio),
-		BlockIndexPrefixLen:      int(cConfig.block_index_prefix_len),
-		SyncMode:                 SyncMode(cConfig.sync_mode),
-		SyncIntervalUs:           uint64(cConfig.sync_interval_us),
-		ComparatorName:           C.GoString(&cConfig.comparator_name[0]),
-		SkipListMaxLevel:         int(cConfig.skip_list_max_level),
-		SkipListProbability:      float32(cConfig.skip_list_probability),
-		DefaultIsolationLevel:    IsolationLevel(cConfig.default_isolation_level),
-		MinDiskSpace:             uint64(cConfig.min_disk_space),
-		L1FileCountTrigger:       int(cConfig.l1_file_count_trigger),
-		L0QueueStallThreshold:    int(cConfig.l0_queue_stall_threshold),
-		UseBtree:                 int(cConfig.use_btree),
-		ObjectLazyCompaction:     int(cConfig.object_lazy_compaction),
-		ObjectPrefetchCompaction: int(cConfig.object_prefetch_compaction),
+		Name:                       C.GoString(&cConfig.name[0]),
+		WriteBufferSize:            uint64(cConfig.write_buffer_size),
+		LevelSizeRatio:             uint64(cConfig.level_size_ratio),
+		MinLevels:                  int(cConfig.min_levels),
+		DividingLevelOffset:        int(cConfig.dividing_level_offset),
+		KlogValueThreshold:         uint64(cConfig.klog_value_threshold),
+		CompressionAlgorithm:       CompressionAlgorithm(cConfig.compression_algorithm),
+		EnableBloomFilter:          cConfig.enable_bloom_filter != 0,
+		BloomFPR:                   float64(cConfig.bloom_fpr),
+		EnableBlockIndexes:         cConfig.enable_block_indexes != 0,
+		IndexSampleRatio:           int(cConfig.index_sample_ratio),
+		BlockIndexPrefixLen:        int(cConfig.block_index_prefix_len),
+		SyncMode:                   SyncMode(cConfig.sync_mode),
+		SyncIntervalUs:             uint64(cConfig.sync_interval_us),
+		ComparatorName:             C.GoString(&cConfig.comparator_name[0]),
+		SkipListMaxLevel:           int(cConfig.skip_list_max_level),
+		SkipListProbability:        float32(cConfig.skip_list_probability),
+		DefaultIsolationLevel:      IsolationLevel(cConfig.default_isolation_level),
+		MinDiskSpace:               uint64(cConfig.min_disk_space),
+		L1FileCountTrigger:         int(cConfig.l1_file_count_trigger),
+		L0QueueStallThreshold:      int(cConfig.l0_queue_stall_threshold),
+		TombstoneDensityTrigger:    float64(cConfig.tombstone_density_trigger),
+		TombstoneDensityMinEntries: uint64(cConfig.tombstone_density_min_entries),
+		UseBtree:                   int(cConfig.use_btree),
+		ObjectLazyCompaction:       int(cConfig.object_lazy_compaction),
+		ObjectPrefetchCompaction:   int(cConfig.object_prefetch_compaction),
 	}, nil
 }
 
@@ -1268,28 +1320,30 @@ func CfConfigSaveToIni(iniFile, sectionName string, config ColumnFamilyConfig) e
 	defer C.free(unsafe.Pointer(cSectionName))
 
 	cConfig := C.tidesdb_column_family_config_t{
-		write_buffer_size:          C.size_t(config.WriteBufferSize),
-		level_size_ratio:           C.size_t(config.LevelSizeRatio),
-		min_levels:                 C.int(config.MinLevels),
-		dividing_level_offset:      C.int(config.DividingLevelOffset),
-		klog_value_threshold:       C.size_t(config.KlogValueThreshold),
-		compression_algorithm:      C.compression_algorithm(config.CompressionAlgorithm),
-		enable_bloom_filter:        boolToInt(config.EnableBloomFilter),
-		bloom_fpr:                  C.double(config.BloomFPR),
-		enable_block_indexes:       boolToInt(config.EnableBlockIndexes),
-		index_sample_ratio:         C.int(config.IndexSampleRatio),
-		block_index_prefix_len:     C.int(config.BlockIndexPrefixLen),
-		sync_mode:                  C.int(config.SyncMode),
-		sync_interval_us:           C.uint64_t(config.SyncIntervalUs),
-		skip_list_max_level:        C.int(config.SkipListMaxLevel),
-		skip_list_probability:      C.float(config.SkipListProbability),
-		default_isolation_level:    C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
-		min_disk_space:             C.uint64_t(config.MinDiskSpace),
-		l1_file_count_trigger:      C.int(config.L1FileCountTrigger),
-		l0_queue_stall_threshold:   C.int(config.L0QueueStallThreshold),
-		use_btree:                  C.int(config.UseBtree),
-		object_lazy_compaction:     C.int(config.ObjectLazyCompaction),
-		object_prefetch_compaction: C.int(config.ObjectPrefetchCompaction),
+		write_buffer_size:             C.size_t(config.WriteBufferSize),
+		level_size_ratio:              C.size_t(config.LevelSizeRatio),
+		min_levels:                    C.int(config.MinLevels),
+		dividing_level_offset:         C.int(config.DividingLevelOffset),
+		klog_value_threshold:          C.size_t(config.KlogValueThreshold),
+		compression_algorithm:         C.compression_algorithm(config.CompressionAlgorithm),
+		enable_bloom_filter:           boolToInt(config.EnableBloomFilter),
+		bloom_fpr:                     C.double(config.BloomFPR),
+		enable_block_indexes:          boolToInt(config.EnableBlockIndexes),
+		index_sample_ratio:            C.int(config.IndexSampleRatio),
+		block_index_prefix_len:        C.int(config.BlockIndexPrefixLen),
+		sync_mode:                     C.int(config.SyncMode),
+		sync_interval_us:              C.uint64_t(config.SyncIntervalUs),
+		skip_list_max_level:           C.int(config.SkipListMaxLevel),
+		skip_list_probability:         C.float(config.SkipListProbability),
+		default_isolation_level:       C.tidesdb_isolation_level_t(config.DefaultIsolationLevel),
+		min_disk_space:                C.uint64_t(config.MinDiskSpace),
+		l1_file_count_trigger:         C.int(config.L1FileCountTrigger),
+		l0_queue_stall_threshold:      C.int(config.L0QueueStallThreshold),
+		tombstone_density_trigger:     C.double(config.TombstoneDensityTrigger),
+		tombstone_density_min_entries: C.uint64_t(config.TombstoneDensityMinEntries),
+		use_btree:                     C.int(config.UseBtree),
+		object_lazy_compaction:        C.int(config.ObjectLazyCompaction),
+		object_prefetch_compaction:    C.int(config.ObjectPrefetchCompaction),
 	}
 
 	if config.Name != "" {
