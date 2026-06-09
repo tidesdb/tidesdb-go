@@ -92,6 +92,29 @@ const (
 	ErrUnknown     = C.TDB_ERR_UNKNOWN
 	ErrLocked      = C.TDB_ERR_LOCKED
 	ErrReadonly    = C.TDB_ERR_READONLY
+	ErrBusy        = C.TDB_ERR_BUSY
+)
+
+// Built-in comparator names. Each is auto-registered when a database is opened,
+// so any of these may be assigned to ColumnFamilyConfig.ComparatorName without
+// first calling RegisterComparator.
+const (
+	// ComparatorMemcmp orders keys by unsigned byte-wise comparison (the default).
+	ComparatorMemcmp = "memcmp"
+	// ComparatorLexicographic orders keys lexicographically.
+	ComparatorLexicographic = "lexicographic"
+	// ComparatorUint64 interprets each 8-byte key as a uint64 in host byte order
+	// (little-endian on most platforms). Keys whose length is not 8 fall back to
+	// memcmp ordering. Encode keys with encoding/binary.NativeEndian to match.
+	ComparatorUint64 = "uint64"
+	// ComparatorInt64 interprets each 8-byte key as an int64 in host byte order
+	// (little-endian on most platforms). Keys whose length is not 8 fall back to
+	// memcmp ordering. Encode keys with encoding/binary.NativeEndian to match.
+	ComparatorInt64 = "int64"
+	// ComparatorReverse orders keys by reverse byte-wise comparison (descending).
+	ComparatorReverse = "reverse"
+	// ComparatorCaseInsensitive orders keys by case-insensitive byte-wise comparison.
+	ComparatorCaseInsensitive = "case_insensitive"
 )
 
 // ObjStoreBackend identifies the object store backend in use.
@@ -181,6 +204,18 @@ func Finalize() {
 	C.tidesdb_finalize()
 }
 
+// RaiseOpenFileLimit raises this process's open-file ceiling toward desired
+// descriptors so a database can keep more sstables open. Because TidesDB sizes
+// MaxOpenSSTables to fit this at open time, call it BEFORE Open. This is an
+// explicit, opt-in operator action; TidesDB never raises the limit itself.
+//
+// A desired value <= 0 just reports the current ceiling without changing it.
+// A failed or partial raise is non-fatal. The returned value is the open-file
+// ceiling in effect after the attempt.
+func RaiseOpenFileLimit(desired int64) int64 {
+	return int64(C.tidesdb_raise_open_file_limit(C.long(desired)))
+}
+
 // TidesDB is a TidesDB instance.
 type TidesDB struct {
 	db *C.tidesdb_t
@@ -219,38 +254,40 @@ type Config struct {
 	UnifiedMemtableSyncMode            SyncMode
 	UnifiedMemtableSyncInterval        uint64
 	MaxConcurrentFlushes               int
+	FinishCompactionsOnClose           bool
 	ObjectStore                        *ObjStore
 	ObjectStoreConfig                  *ObjStoreConfig
 }
 
 // ColumnFamilyConfig is the configuration for a column family.
 type ColumnFamilyConfig struct {
-	Name                        string
-	WriteBufferSize             uint64
-	LevelSizeRatio              uint64
-	MinLevels                   int
-	DividingLevelOffset         int
-	KlogValueThreshold          uint64
-	CompressionAlgorithm        CompressionAlgorithm
-	EnableBloomFilter           bool
-	BloomFPR                    float64
-	EnableBlockIndexes          bool
-	IndexSampleRatio            int
-	BlockIndexPrefixLen         int
-	SyncMode                    SyncMode
-	SyncIntervalUs              uint64
-	ComparatorName              string
-	SkipListMaxLevel            int
-	SkipListProbability         float32
-	DefaultIsolationLevel       IsolationLevel
-	MinDiskSpace                uint64
-	L1FileCountTrigger          int
-	L0QueueStallThreshold       int
-	TombstoneDensityTrigger     float64
-	TombstoneDensityMinEntries  uint64
-	UseBtree                    int
-	ObjectLazyCompaction        int
-	ObjectPrefetchCompaction    int
+	Name                       string
+	WriteBufferSize            uint64
+	LevelSizeRatio             uint64
+	MinLevels                  int
+	DividingLevelOffset        int
+	KlogValueThreshold         uint64
+	CompressionAlgorithm       CompressionAlgorithm
+	EnableBloomFilter          bool
+	BloomFPR                   float64
+	EnableBlockIndexes         bool
+	IndexSampleRatio           int
+	BlockIndexPrefixLen        int
+	SyncMode                   SyncMode
+	SyncIntervalUs             uint64
+	ComparatorName             string
+	ComparatorCtxStr           string
+	SkipListMaxLevel           int
+	SkipListProbability        float32
+	DefaultIsolationLevel      IsolationLevel
+	MinDiskSpace               uint64
+	L1FileCountTrigger         int
+	L0QueueStallThreshold      int
+	TombstoneDensityTrigger    float64
+	TombstoneDensityMinEntries uint64
+	UseBtree                   int
+	ObjectLazyCompaction       int
+	ObjectPrefetchCompaction   int
 }
 
 // Stats is statistics about a column family.
@@ -276,6 +313,17 @@ type Stats struct {
 	LevelTombstoneCounts []uint64
 	MaxSSTDensity        float64
 	MaxSSTDensityLevel   int
+	// Write-amplification counters (lifetime since open, on-disk framed bytes).
+	// Divide the write totals by UserBytesWritten for this CF's write amplification.
+	// WalBytesWritten is zero in unified mode; the shared WAL volume is reported
+	// db-wide via DbStats.UwalBytesWritten. The *Count fields count output sstables.
+	WalBytesWritten        uint64
+	FlushBytesWritten      uint64
+	CompactionBytesWritten uint64
+	CompactionBytesRead    uint64
+	UserBytesWritten       uint64
+	FlushCount             uint64
+	CompactionCount        uint64
 }
 
 // CacheStats is statistics about the block cache.
@@ -291,37 +339,50 @@ type CacheStats struct {
 
 // DbStats is aggregate statistics across the entire database instance.
 type DbStats struct {
-	NumColumnFamilies       int
-	TotalMemory             uint64
-	AvailableMemory         uint64
-	ResolvedMemoryLimit     uint64
-	MemoryPressureLevel     int
-	FlushPendingCount       int
-	TotalMemtableBytes      int64
-	TotalImmutableCount     int
-	TotalSstableCount       int
-	TotalDataSizeBytes      uint64
-	NumOpenSstables         int
-	GlobalSeq               uint64
-	TxnMemoryBytes          int64
-	CompactionQueueSize     uint64
-	FlushQueueSize          uint64
-	UnifiedMemtableEnabled  bool
-	UnifiedMemtableBytes    int64
-	UnifiedImmutableCount   int
-	UnifiedIsFlushing       bool
-	UnifiedNextCFIndex      uint32
-	UnifiedWalGeneration    uint64
-	ObjectStoreEnabled      bool
-	ObjectStoreConnector    string
-	LocalCacheBytesUsed     uint64
-	LocalCacheBytesMax      uint64
-	LocalCacheNumFiles      int
-	LastUploadedGeneration  uint64
-	UploadQueueDepth        uint64
-	TotalUploads            uint64
-	TotalUploadFailures     uint64
-	ReplicaMode             bool
+	NumColumnFamilies      int
+	TotalMemory            uint64
+	AvailableMemory        uint64
+	ResolvedMemoryLimit    uint64
+	MemoryPressureLevel    int
+	FlushPendingCount      int
+	TotalMemtableBytes     int64
+	TotalImmutableCount    int
+	TotalSstableCount      int
+	TotalDataSizeBytes     uint64
+	NumOpenSstables        int
+	GlobalSeq              uint64
+	TxnMemoryBytes         int64
+	CompactionQueueSize    uint64
+	FlushQueueSize         uint64
+	UnifiedMemtableEnabled bool
+	UnifiedMemtableBytes   int64
+	UnifiedImmutableCount  int
+	UnifiedIsFlushing      bool
+	UnifiedNextCFIndex     uint32
+	UnifiedWalGeneration   uint64
+	ObjectStoreEnabled     bool
+	ObjectStoreConnector   string
+	LocalCacheBytesUsed    uint64
+	LocalCacheBytesMax     uint64
+	LocalCacheNumFiles     int
+	LastUploadedGeneration uint64
+	UploadQueueDepth       uint64
+	TotalUploads           uint64
+	TotalUploadFailures    uint64
+	ReplicaMode            bool
+	// Write-amplification counters (lifetime since open, on-disk framed bytes).
+	// UwalBytesWritten is the shared unified WAL volume (zero when unified mode is
+	// off); the remaining fields are summed across all column families. db-wide
+	// write amplification = (uwal + wal + flush + compaction) / user bytes.
+	// The *Count fields count output sstables, not logical runs.
+	UwalBytesWritten       uint64
+	WalBytesWritten        uint64
+	FlushBytesWritten      uint64
+	CompactionBytesWritten uint64
+	CompactionBytesRead    uint64
+	UserBytesWritten       uint64
+	FlushCount             uint64
+	CompactionCount        uint64
 }
 
 // errorFromCode converts a C error code to a GO error.
@@ -358,6 +419,8 @@ func errorFromCode(code C.int, context string) error {
 		errMsg = "database is locked"
 	case C.TDB_ERR_READONLY:
 		errMsg = "database is read-only"
+	case C.TDB_ERR_BUSY:
+		errMsg = "resource busy"
 	default:
 		errMsg = "unknown error"
 	}
@@ -388,6 +451,7 @@ func DefaultConfig() Config {
 		UnifiedMemtableSyncMode:            SyncMode(cConfig.unified_memtable_sync_mode),
 		UnifiedMemtableSyncInterval:        uint64(cConfig.unified_memtable_sync_interval_us),
 		MaxConcurrentFlushes:               int(cConfig.max_concurrent_flushes),
+		FinishCompactionsOnClose:           cConfig.finish_compactions_on_close != 0,
 	}
 }
 
@@ -409,6 +473,7 @@ func DefaultColumnFamilyConfig() ColumnFamilyConfig {
 		SyncMode:                   SyncMode(cConfig.sync_mode),
 		SyncIntervalUs:             uint64(cConfig.sync_interval_us),
 		ComparatorName:             C.GoString(&cConfig.comparator_name[0]),
+		ComparatorCtxStr:           C.GoString(&cConfig.comparator_ctx_str[0]),
 		SkipListMaxLevel:           int(cConfig.skip_list_max_level),
 		SkipListProbability:        float32(cConfig.skip_list_probability),
 		DefaultIsolationLevel:      IsolationLevel(cConfig.default_isolation_level),
@@ -420,6 +485,24 @@ func DefaultColumnFamilyConfig() ColumnFamilyConfig {
 		UseBtree:                   int(cConfig.use_btree),
 		ObjectLazyCompaction:       int(cConfig.object_lazy_compaction),
 		ObjectPrefetchCompaction:   int(cConfig.object_prefetch_compaction),
+	}
+}
+
+// setComparatorFields copies the comparator name and context string from a Go
+// ColumnFamilyConfig into the fixed-size char arrays of a C column family config,
+// NUL-terminating each. Caller-supplied strings longer than the C limits are truncated.
+func setComparatorFields(cConfig *C.tidesdb_column_family_config_t, name, ctxStr string) {
+	if name != "" {
+		cName := C.CString(name)
+		defer C.free(unsafe.Pointer(cName))
+		C.strncpy(&cConfig.comparator_name[0], cName, C.TDB_MAX_COMPARATOR_NAME-1)
+		cConfig.comparator_name[C.TDB_MAX_COMPARATOR_NAME-1] = 0
+	}
+	if ctxStr != "" {
+		cCtx := C.CString(ctxStr)
+		defer C.free(unsafe.Pointer(cCtx))
+		C.strncpy(&cConfig.comparator_ctx_str[0], cCtx, C.TDB_MAX_COMPARATOR_CTX-1)
+		cConfig.comparator_ctx_str[C.TDB_MAX_COMPARATOR_CTX-1] = 0
 	}
 }
 
@@ -453,6 +536,7 @@ func Open(config Config) (*TidesDB, error) {
 		unified_memtable_sync_mode:             C.int(config.UnifiedMemtableSyncMode),
 		unified_memtable_sync_interval_us:      C.uint64_t(config.UnifiedMemtableSyncInterval),
 		max_concurrent_flushes:                 C.int(config.MaxConcurrentFlushes),
+		finish_compactions_on_close:            C.int(0),
 	}
 
 	if config.LogToFile {
@@ -461,6 +545,10 @@ func Open(config Config) (*TidesDB, error) {
 
 	if config.UnifiedMemtable {
 		cConfig.unified_memtable = C.int(1)
+	}
+
+	if config.FinishCompactionsOnClose {
+		cConfig.finish_compactions_on_close = C.int(1)
 	}
 
 	if config.ObjectStore != nil {
@@ -580,12 +668,7 @@ func (db *TidesDB) CreateColumnFamily(name string, config ColumnFamilyConfig) er
 		cConfig.enable_block_indexes = C.int(1)
 	}
 
-	if config.ComparatorName != "" {
-		cCompName := C.CString(config.ComparatorName)
-		defer C.free(unsafe.Pointer(cCompName))
-		C.strncpy(&cConfig.comparator_name[0], cCompName, C.TDB_MAX_COMPARATOR_NAME-1)
-		cConfig.comparator_name[C.TDB_MAX_COMPARATOR_NAME-1] = 0
-	}
+	setComparatorFields(&cConfig, config.ComparatorName, config.ComparatorCtxStr)
 
 	result := C.tidesdb_create_column_family(db.db, cName, &cConfig)
 	return errorFromCode(result, "failed to create column family")
@@ -699,6 +782,14 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 		TombstoneRatio:     float64(cStats.tombstone_ratio),
 		MaxSSTDensity:      float64(cStats.max_sst_density),
 		MaxSSTDensityLevel: int(cStats.max_sst_density_level),
+
+		WalBytesWritten:        uint64(cStats.wal_bytes_written),
+		FlushBytesWritten:      uint64(cStats.flush_bytes_written),
+		CompactionBytesWritten: uint64(cStats.compaction_bytes_written),
+		CompactionBytesRead:    uint64(cStats.compaction_bytes_read),
+		UserBytesWritten:       uint64(cStats.user_bytes_written),
+		FlushCount:             uint64(cStats.flush_count),
+		CompactionCount:        uint64(cStats.compaction_count),
 	}
 
 	if cStats.num_levels > 0 && cStats.level_sizes != nil {
@@ -750,6 +841,7 @@ func (cf *ColumnFamily) GetStats() (*Stats, error) {
 			SyncMode:                   SyncMode(cStats.config.sync_mode),
 			SyncIntervalUs:             uint64(cStats.config.sync_interval_us),
 			ComparatorName:             C.GoString(&cStats.config.comparator_name[0]),
+			ComparatorCtxStr:           C.GoString(&cStats.config.comparator_ctx_str[0]),
 			SkipListMaxLevel:           int(cStats.config.skip_list_max_level),
 			SkipListProbability:        float32(cStats.config.skip_list_probability),
 			DefaultIsolationLevel:      IsolationLevel(cStats.config.default_isolation_level),
@@ -871,6 +963,17 @@ func (db *TidesDB) Purge() error {
 	return errorFromCode(result, "failed to purge database")
 }
 
+// CancelBackgroundWork cancels background compaction db-wide. In-flight merges
+// bail out safely and queued compaction is skipped; flushes are unaffected so
+// durability is preserved. The call blocks (bounded) until compaction is idle.
+//
+// The cancellation is sticky for the session and is reset on the next Open. It
+// is intended to be called right before Close for a fast shutdown.
+func (db *TidesDB) CancelBackgroundWork() error {
+	result := C.tidesdb_cancel_background_work(db.db)
+	return errorFromCode(result, "failed to cancel background work")
+}
+
 // GetDbStats retrieves aggregate statistics across the entire database instance.
 // Unlike GetStats (which heap-allocates), GetDbStats fills a caller-provided struct
 // on the stack. No free is needed.
@@ -903,14 +1006,14 @@ func (db *TidesDB) GetDbStats() (*DbStats, error) {
 		UnifiedIsFlushing:      cStats.unified_is_flushing != 0,
 		UnifiedNextCFIndex:     uint32(cStats.unified_next_cf_index),
 		UnifiedWalGeneration:   uint64(cStats.unified_wal_generation),
-		ObjectStoreEnabled: cStats.object_store_enabled != 0,
+		ObjectStoreEnabled:     cStats.object_store_enabled != 0,
 		ObjectStoreConnector: func() string {
 			if cStats.object_store_connector != nil {
 				return C.GoString(cStats.object_store_connector)
 			}
 			return ""
 		}(),
-		LocalCacheBytesUsed: uint64(cStats.local_cache_bytes_used),
+		LocalCacheBytesUsed:    uint64(cStats.local_cache_bytes_used),
 		LocalCacheBytesMax:     uint64(cStats.local_cache_bytes_max),
 		LocalCacheNumFiles:     int(cStats.local_cache_num_files),
 		LastUploadedGeneration: uint64(cStats.last_uploaded_generation),
@@ -918,6 +1021,15 @@ func (db *TidesDB) GetDbStats() (*DbStats, error) {
 		TotalUploads:           uint64(cStats.total_uploads),
 		TotalUploadFailures:    uint64(cStats.total_upload_failures),
 		ReplicaMode:            cStats.replica_mode != 0,
+
+		UwalBytesWritten:       uint64(cStats.uwal_bytes_written),
+		WalBytesWritten:        uint64(cStats.wal_bytes_written),
+		FlushBytesWritten:      uint64(cStats.flush_bytes_written),
+		CompactionBytesWritten: uint64(cStats.compaction_bytes_written),
+		CompactionBytesRead:    uint64(cStats.compaction_bytes_read),
+		UserBytesWritten:       uint64(cStats.user_bytes_written),
+		FlushCount:             uint64(cStats.flush_count),
+		CompactionCount:        uint64(cStats.compaction_count),
 	}, nil
 }
 
@@ -958,12 +1070,7 @@ func (cf *ColumnFamily) UpdateRuntimeConfig(config ColumnFamilyConfig, persistTo
 		cConfig.enable_block_indexes = C.int(1)
 	}
 
-	if config.ComparatorName != "" {
-		cCompName := C.CString(config.ComparatorName)
-		defer C.free(unsafe.Pointer(cCompName))
-		C.strncpy(&cConfig.comparator_name[0], cCompName, C.TDB_MAX_COMPARATOR_NAME-1)
-		cConfig.comparator_name[C.TDB_MAX_COMPARATOR_NAME-1] = 0
-	}
+	setComparatorFields(&cConfig, config.ComparatorName, config.ComparatorCtxStr)
 
 	persist := C.int(0)
 	if persistToDisk {
@@ -1298,6 +1405,7 @@ func CfConfigLoadFromIni(iniFile, sectionName string) (*ColumnFamilyConfig, erro
 		SyncMode:                   SyncMode(cConfig.sync_mode),
 		SyncIntervalUs:             uint64(cConfig.sync_interval_us),
 		ComparatorName:             C.GoString(&cConfig.comparator_name[0]),
+		ComparatorCtxStr:           C.GoString(&cConfig.comparator_ctx_str[0]),
 		SkipListMaxLevel:           int(cConfig.skip_list_max_level),
 		SkipListProbability:        float32(cConfig.skip_list_probability),
 		DefaultIsolationLevel:      IsolationLevel(cConfig.default_isolation_level),
@@ -1353,12 +1461,7 @@ func CfConfigSaveToIni(iniFile, sectionName string, config ColumnFamilyConfig) e
 		}
 	}
 
-	if config.ComparatorName != "" {
-		cCompName := C.CString(config.ComparatorName)
-		defer C.free(unsafe.Pointer(cCompName))
-		C.strncpy(&cConfig.comparator_name[0], cCompName, C.TDB_MAX_COMPARATOR_NAME-1)
-		cConfig.comparator_name[C.TDB_MAX_COMPARATOR_NAME-1] = 0
-	}
+	setComparatorFields(&cConfig, config.ComparatorName, config.ComparatorCtxStr)
 
 	result := C.tidesdb_cf_config_save_to_ini(cIniFile, cSectionName, &cConfig)
 	return errorFromCode(result, "failed to save config to INI")

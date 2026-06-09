@@ -18,6 +18,7 @@ package tidesdb_go
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/gob"
 	"fmt"
 	"os"
@@ -4186,5 +4187,370 @@ func TestMaxConcurrentFlushesConfig(t *testing.T) {
 
 	if err := cf.FlushMemtable(); err != nil {
 		t.Fatalf("FlushMemtable failed: %v", err)
+	}
+}
+
+func TestRaiseOpenFileLimit(t *testing.T) {
+	// A non-positive request reports the current ceiling without changing it.
+	current := RaiseOpenFileLimit(0)
+	if current <= 0 {
+		t.Fatalf("Expected a positive current open-file ceiling, got %d", current)
+	}
+	t.Logf("Current open-file ceiling: %d", current)
+
+	// Requesting the current ceiling should report at least that many.
+	after := RaiseOpenFileLimit(current)
+	if after < current {
+		t.Fatalf("Ceiling shrank after raise attempt: before=%d after=%d", current, after)
+	}
+	t.Logf("Open-file ceiling after raise(%d): %d", current, after)
+}
+
+func TestCancelBackgroundWork(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := DefaultConfig()
+	config.DBPath = "testdb"
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	if err := db.CreateColumnFamily("cancel_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	cf, err := db.GetColumnFamily("cancel_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// Write some data so there is potential background work.
+	for i := 0; i < 100; i++ {
+		txn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin txn: %v", err)
+		}
+		key := []byte(fmt.Sprintf("key-%04d", i))
+		if err := txn.Put(cf, key, bytes.Repeat([]byte("v"), 128), -1); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+		if err := txn.Commit(); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+		txn.Free()
+	}
+
+	if err := db.CancelBackgroundWork(); err != nil {
+		t.Fatalf("CancelBackgroundWork failed: %v", err)
+	}
+	t.Logf("CancelBackgroundWork completed successfully")
+}
+
+func TestFinishCompactionsOnCloseConfig(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	defaults := DefaultConfig()
+	t.Logf("Default FinishCompactionsOnClose: %t", defaults.FinishCompactionsOnClose)
+
+	config := defaults
+	config.DBPath = "testdb"
+	config.FinishCompactionsOnClose = true
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database with FinishCompactionsOnClose=true: %v", err)
+	}
+
+	cfConfig := DefaultColumnFamilyConfig()
+	if err := db.CreateColumnFamily("finish_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	cf, err := db.GetColumnFamily("finish_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin txn: %v", err)
+	}
+	if err := txn.Put(cf, []byte("k"), []byte("v"), -1); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := txn.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	txn.Free()
+
+	// Close should honor the finish-compactions-on-close behavior without error.
+	if err := db.Close(); err != nil {
+		t.Fatalf("Failed to close database: %v", err)
+	}
+}
+
+func TestErrorCodeBusy(t *testing.T) {
+	if ErrBusy != -14 {
+		t.Fatalf("Expected ErrBusy to be -14, got %d", ErrBusy)
+	}
+	t.Logf("ErrBusy = %d", ErrBusy)
+}
+
+func TestBuiltinComparatorNames(t *testing.T) {
+	cases := map[string]string{
+		ComparatorMemcmp:          "memcmp",
+		ComparatorLexicographic:   "lexicographic",
+		ComparatorUint64:          "uint64",
+		ComparatorInt64:           "int64",
+		ComparatorReverse:         "reverse",
+		ComparatorCaseInsensitive: "case_insensitive",
+	}
+	for got, want := range cases {
+		if got != want {
+			t.Fatalf("Built-in comparator name mismatch: got %q want %q", got, want)
+		}
+	}
+}
+
+func TestUint64ComparatorOrdering(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := DefaultConfig()
+	config.DBPath = "testdb"
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	cfConfig.ComparatorName = ComparatorUint64
+	if err := db.CreateColumnFamily("u64_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	cf, err := db.GetColumnFamily("u64_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	// The uint64 comparator reads each 8-byte key in host byte order, so encode
+	// keys with NativeEndian. Insert out of numeric order.
+	nums := []uint64{5, 1, 256, 3, 2, 1000, 4}
+	for _, n := range nums {
+		key := make([]byte, 8)
+		binary.NativeEndian.PutUint64(key, n)
+		txn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin txn: %v", err)
+		}
+		if err := txn.Put(cf, key, []byte("v"), -1); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+		if err := txn.Commit(); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+		txn.Free()
+	}
+
+	// Verify the cf config round-trips the comparator name.
+	stats, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats failed: %v", err)
+	}
+	if stats.Config == nil || stats.Config.ComparatorName != ComparatorUint64 {
+		t.Fatalf("Expected ComparatorName %q in stats config, got %+v", ComparatorUint64, stats.Config)
+	}
+
+	// Iterate forward; keys must come out in ascending numeric order.
+	txn, err := db.BeginTxn()
+	if err != nil {
+		t.Fatalf("Failed to begin txn: %v", err)
+	}
+	defer txn.Free()
+	iter, err := txn.NewIterator(cf)
+	if err != nil {
+		t.Fatalf("Failed to create iterator: %v", err)
+	}
+	defer iter.Free()
+
+	if err := iter.SeekToFirst(); err != nil {
+		t.Fatalf("SeekToFirst failed: %v", err)
+	}
+
+	var got []uint64
+	for iter.Valid() {
+		key, err := iter.Key()
+		if err != nil {
+			t.Fatalf("Key failed: %v", err)
+		}
+		if len(key) != 8 {
+			t.Fatalf("Expected 8-byte key, got %d bytes", len(key))
+		}
+		got = append(got, binary.NativeEndian.Uint64(key))
+		if err := iter.Next(); err != nil {
+			break
+		}
+	}
+
+	want := []uint64{1, 2, 3, 4, 5, 256, 1000}
+	if len(got) != len(want) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("uint64 comparator ordering wrong at %d: got %v want %v", i, got, want)
+		}
+	}
+	t.Logf("uint64 comparator produced ascending order: %v", got)
+}
+
+func TestComparatorCtxStrIni(t *testing.T) {
+	iniFile := "testdb_comparator_ctx.ini"
+	os.Remove(iniFile)
+	defer os.Remove(iniFile)
+
+	config := DefaultColumnFamilyConfig()
+	config.Name = "ctx_cf"
+	config.ComparatorName = ComparatorMemcmp
+	config.ComparatorCtxStr = "endian=big;width=8"
+
+	if err := CfConfigSaveToIni(iniFile, "ctx_cf", config); err != nil {
+		t.Fatalf("Failed to save config to INI: %v", err)
+	}
+
+	loaded, err := CfConfigLoadFromIni(iniFile, "ctx_cf")
+	if err != nil {
+		t.Fatalf("Failed to load config from INI: %v", err)
+	}
+
+	if loaded.ComparatorName != config.ComparatorName {
+		t.Fatalf("ComparatorName mismatch: got %q want %q", loaded.ComparatorName, config.ComparatorName)
+	}
+	if loaded.ComparatorCtxStr != config.ComparatorCtxStr {
+		t.Fatalf("ComparatorCtxStr mismatch: got %q want %q", loaded.ComparatorCtxStr, config.ComparatorCtxStr)
+	}
+	t.Logf("Round-tripped ComparatorCtxStr: %q", loaded.ComparatorCtxStr)
+}
+
+func TestStatsWriteAmplification(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := DefaultConfig()
+	config.DBPath = "testdb"
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	if err := db.CreateColumnFamily("wa_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	cf, err := db.GetColumnFamily("wa_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	for i := 0; i < 200; i++ {
+		txn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin txn: %v", err)
+		}
+		key := []byte(fmt.Sprintf("wa-key-%05d", i))
+		if err := txn.Put(cf, key, bytes.Repeat([]byte("x"), 256), -1); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+		if err := txn.Commit(); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+		txn.Free()
+	}
+
+	if err := cf.FlushMemtable(); err != nil {
+		t.Fatalf("FlushMemtable failed: %v", err)
+	}
+	// Block until flush settles so flush counters are populated.
+	if err := cf.PurgeCF(); err != nil {
+		t.Fatalf("PurgeCF failed: %v", err)
+	}
+
+	stats, err := cf.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats failed: %v", err)
+	}
+
+	t.Logf("WA counters: user=%d wal=%d flush=%d(%d files) compaction_w=%d compaction_r=%d(%d outs)",
+		stats.UserBytesWritten, stats.WalBytesWritten, stats.FlushBytesWritten, stats.FlushCount,
+		stats.CompactionBytesWritten, stats.CompactionBytesRead, stats.CompactionCount)
+
+	if stats.UserBytesWritten == 0 {
+		t.Fatalf("Expected UserBytesWritten > 0 after committing data")
+	}
+	if stats.FlushBytesWritten == 0 {
+		t.Fatalf("Expected FlushBytesWritten > 0 after flush+purge")
+	}
+}
+
+func TestDbStatsWriteAmplification(t *testing.T) {
+	cleanupTestDB(t)
+	defer cleanupTestDB(t)
+
+	config := DefaultConfig()
+	config.DBPath = "testdb"
+
+	db, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	cfConfig := DefaultColumnFamilyConfig()
+	if err := db.CreateColumnFamily("dbwa_cf", cfConfig); err != nil {
+		t.Fatalf("Failed to create column family: %v", err)
+	}
+	cf, err := db.GetColumnFamily("dbwa_cf")
+	if err != nil {
+		t.Fatalf("Failed to get column family: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		txn, err := db.BeginTxn()
+		if err != nil {
+			t.Fatalf("Failed to begin txn: %v", err)
+		}
+		key := []byte(fmt.Sprintf("dbwa-%05d", i))
+		if err := txn.Put(cf, key, bytes.Repeat([]byte("y"), 200), -1); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+		if err := txn.Commit(); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+		txn.Free()
+	}
+
+	if err := db.Purge(); err != nil {
+		t.Fatalf("Purge failed: %v", err)
+	}
+
+	stats, err := db.GetDbStats()
+	if err != nil {
+		t.Fatalf("GetDbStats failed: %v", err)
+	}
+
+	t.Logf("DB WA counters: user=%d uwal=%d wal=%d flush=%d compaction_w=%d compaction_r=%d flush_count=%d compaction_count=%d",
+		stats.UserBytesWritten, stats.UwalBytesWritten, stats.WalBytesWritten, stats.FlushBytesWritten,
+		stats.CompactionBytesWritten, stats.CompactionBytesRead, stats.FlushCount, stats.CompactionCount)
+
+	if stats.UserBytesWritten == 0 {
+		t.Fatalf("Expected db-wide UserBytesWritten > 0 after committing data")
 	}
 }
