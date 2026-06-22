@@ -78,21 +78,22 @@ const (
 
 // Error codes from TidesDB
 const (
-	ErrSuccess     = C.TDB_SUCCESS
-	ErrMemory      = C.TDB_ERR_MEMORY
-	ErrInvalidArgs = C.TDB_ERR_INVALID_ARGS
-	ErrNotFound    = C.TDB_ERR_NOT_FOUND
-	ErrIO          = C.TDB_ERR_IO
-	ErrCorruption  = C.TDB_ERR_CORRUPTION
-	ErrExists      = C.TDB_ERR_EXISTS
-	ErrConflict    = C.TDB_ERR_CONFLICT
-	ErrTooLarge    = C.TDB_ERR_TOO_LARGE
-	ErrMemoryLimit = C.TDB_ERR_MEMORY_LIMIT
-	ErrInvalidDB   = C.TDB_ERR_INVALID_DB
-	ErrUnknown     = C.TDB_ERR_UNKNOWN
-	ErrLocked      = C.TDB_ERR_LOCKED
-	ErrReadonly    = C.TDB_ERR_READONLY
-	ErrBusy        = C.TDB_ERR_BUSY
+	ErrSuccess      = C.TDB_SUCCESS
+	ErrMemory       = C.TDB_ERR_MEMORY
+	ErrInvalidArgs  = C.TDB_ERR_INVALID_ARGS
+	ErrNotFound     = C.TDB_ERR_NOT_FOUND
+	ErrIO           = C.TDB_ERR_IO
+	ErrCorruption   = C.TDB_ERR_CORRUPTION
+	ErrExists       = C.TDB_ERR_EXISTS
+	ErrConflict     = C.TDB_ERR_CONFLICT
+	ErrTooLarge     = C.TDB_ERR_TOO_LARGE
+	ErrMemoryLimit  = C.TDB_ERR_MEMORY_LIMIT
+	ErrInvalidDB    = C.TDB_ERR_INVALID_DB
+	ErrUnknown      = C.TDB_ERR_UNKNOWN
+	ErrLocked       = C.TDB_ERR_LOCKED
+	ErrReadonly     = C.TDB_ERR_READONLY
+	ErrBusy         = C.TDB_ERR_BUSY
+	ErrPrecondition = C.TDB_ERR_PRECONDITION
 )
 
 // Built-in comparator names. Each is auto-registered when a database is opened,
@@ -370,6 +371,12 @@ type DbStats struct {
 	TotalUploads           uint64
 	TotalUploadFailures    uint64
 	ReplicaMode            bool
+	// Single-writer fencing (object-store mode). PrimaryEpoch is the lease epoch this
+	// primary currently holds (0 when not a primary / no lease); SeenEpoch is the highest
+	// lease epoch a replica has observed. A promotion that took bumps PrimaryEpoch; a
+	// fenced primary sees ReplicaMode flip back to true.
+	PrimaryEpoch uint64
+	SeenEpoch    uint64
 	// Write-amplification counters (lifetime since open, on-disk framed bytes).
 	// UwalBytesWritten is the shared unified WAL volume (zero when unified mode is
 	// off); the remaining fields are summed across all column families. db-wide
@@ -421,6 +428,8 @@ func errorFromCode(code C.int, context string) error {
 		errMsg = "database is read-only"
 	case C.TDB_ERR_BUSY:
 		errMsg = "resource busy"
+	case C.TDB_ERR_PRECONDITION:
+		errMsg = "precondition failed"
 	default:
 		errMsg = "unknown error"
 	}
@@ -1021,6 +1030,9 @@ func (db *TidesDB) GetDbStats() (*DbStats, error) {
 		TotalUploads:           uint64(cStats.total_uploads),
 		TotalUploadFailures:    uint64(cStats.total_upload_failures),
 		ReplicaMode:            cStats.replica_mode != 0,
+
+		PrimaryEpoch: uint64(cStats.primary_epoch),
+		SeenEpoch:    uint64(cStats.seen_epoch),
 
 		UwalBytesWritten:       uint64(cStats.uwal_bytes_written),
 		WalBytesWritten:        uint64(cStats.wal_bytes_written),

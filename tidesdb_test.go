@@ -3750,6 +3750,14 @@ func TestDbStatsObjectStoreFields(t *testing.T) {
 		t.Fatalf("Expected replica mode disabled, got enabled")
 	}
 
+	// Without a primary lease (no object store), single-writer fencing epochs are zero.
+	if dbStats.PrimaryEpoch != 0 {
+		t.Fatalf("Expected PrimaryEpoch 0 without a lease, got %d", dbStats.PrimaryEpoch)
+	}
+	if dbStats.SeenEpoch != 0 {
+		t.Fatalf("Expected SeenEpoch 0 without a lease, got %d", dbStats.SeenEpoch)
+	}
+
 	t.Logf("ObjectStoreEnabled: %t", dbStats.ObjectStoreEnabled)
 	t.Logf("ObjectStoreConnector: %s", dbStats.ObjectStoreConnector)
 	t.Logf("LocalCacheBytesUsed: %d", dbStats.LocalCacheBytesUsed)
@@ -3760,6 +3768,8 @@ func TestDbStatsObjectStoreFields(t *testing.T) {
 	t.Logf("TotalUploads: %d", dbStats.TotalUploads)
 	t.Logf("TotalUploadFailures: %d", dbStats.TotalUploadFailures)
 	t.Logf("ReplicaMode: %t", dbStats.ReplicaMode)
+	t.Logf("PrimaryEpoch: %d", dbStats.PrimaryEpoch)
+	t.Logf("SeenEpoch: %d", dbStats.SeenEpoch)
 
 	t.Logf("DbStatsObjectStoreFields test completed successfully")
 }
@@ -4298,6 +4308,13 @@ func TestErrorCodeBusy(t *testing.T) {
 		t.Fatalf("Expected ErrBusy to be -14, got %d", ErrBusy)
 	}
 	t.Logf("ErrBusy = %d", ErrBusy)
+}
+
+func TestErrorCodePrecondition(t *testing.T) {
+	if ErrPrecondition != -15 {
+		t.Fatalf("Expected ErrPrecondition to be -15, got %d", ErrPrecondition)
+	}
+	t.Logf("ErrPrecondition = %d", ErrPrecondition)
 }
 
 func TestBuiltinComparatorNames(t *testing.T) {
